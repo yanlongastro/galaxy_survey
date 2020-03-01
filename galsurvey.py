@@ -43,6 +43,15 @@ def cost(k1, k2, k3):
 def f_kernal(k1, k2, cos12):
     return 5./7.+.5*(k1/k2+k2/k1)*cos12+2./7.*cos12**2
 
+def s123(k1, k2, k3):
+    if k1==k2==k3:
+        s123 = 6
+    elif k1==k2 or k2==k3 or k3==k1:
+        s123 = 2
+    else:
+        s123 = 1
+    return s123
+    
 
 class cosmology:
     """
@@ -348,5 +357,74 @@ class survey:
         A2 = np.mean(A2sample)
         return np.sqrt(A2)
 
-    def integrand_bs(self, kargs, mu, z, i, j, simplify=False):
-        pass
+    def integrand_bs(self, kargs, mu, z, i, j, coordinate='cartesian', simplify=False):
+        if coordinate == 'cartesian':
+            db = self.bispectrum_derivative(kargs, mu=mu, z=z, coordinate=coordinate)
+            integrand_db = db[i]*db[j]
+            k1, k2, k3 = kargs
+            p1, p2, p3 = self.power_spectrum(k1, mu=mu, z=z), self.power_spectrum(k2, mu=mu, z=z), self.power_spectrum(k3, mu=mu, z=z)
+            integrand_cov = k1*k2*k3*beta(cost(*kargs))/s123(*kargs)/(p1*p2*p3)
+            integrand = integrand_db*integrand_cov
+            return integrand
+        elif coordinate == 'child18':
+            pass
+
+    def naive_integration_bs(self, args, coordinate='cartesian'):
+        res = 0
+        for kmuargs in self.kkkmu_list:
+            res += self.integrand_bs(*kmuargs, *args, coordinate=coordinate)
+        if coordinate == 'cartesian':
+            res *= self.dk1*self.dk2*self.dk3
+            return res
+        elif coordinate == 'child18':
+            pass
+
+    def fisher_matrix_bs(self, regions, coordinate='cartesian', addprior=True, tol=1e-4, rtol=1e-4, div_k1=0, div_k2=0, div_k3=0, div_mu=0):
+        """
+        todos:  - test this method
+                - add RSD
+                - add child18 coordinate
+        """
+        fisher_bs_list = np.zeros((len(self.zmid_list), 2, 2))
+        fisher_temp = np.zeros((2,2))
+        for z in self.zmid_list:
+            v = self.survey_volume(self.f_sky, z-self.dz/2, z+self.dz/2)
+            #print(z)
+            for i in range(2):
+                for j in range(i, 2):
+                    if 'RSD' not in self.ingredients:
+                        for subregion in regions:
+                            k1_min = subregion['k1_min']
+                            k1_max = subregion['k1_max']
+                            k2_min = subregion['k2_min']
+                            k2_max = subregion['k2_max']
+                            k3_min = subregion['k3_min']
+                            k3_max = subregion['k3_max']
+                            if div_k1 !=0 and div_k2 !=0 and div_k3 !=0:
+                                self.dk1 = dk1 = (k1_max-k1_min)/div_k1
+                                self.dk2 = dk2 = (k2_max-k2_min)/div_k2
+                                self.dk3 = dk3 = (k3_max-k3_min)/div_k3
+                                self.dmu = 1.0
+                                k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
+                                k2_list = np.linspace(k2_min+dk2/2, k2_max-dk2/2, num=div_k2)
+                                k3_list = np.linspace(k3_min+dk3/2, k3_max-dk3/2, num=div_k3)
+                                mu_list = np.array([0.0])
+                                self.kkkmu_list = list(itertools.product(k1_list, k2_list, k3_list, mu_list))
+                                fisher_temp[i,j] = v/(np.pi)*self.naive_integration_bs(args=(z, i, j), coordinate=coordinate)
+                            else:
+                                pass
+                    else:
+                        pass
+
+            fisher_temp[1, 0] = fisher_temp[0, 1]
+            fisher_bs_list[self.zmid_list==z] = fisher_temp
+        
+        self.fisher_bs_list = np.array(fisher_bs_list)
+        self.fisher_bs = np.sum(fisher_bs_list, axis=0)
+        if addprior == True:
+            self.fisher_bs[0,0] += 1/self.alpha_prior['stdev']**2
+            self.fisher_bs[1,1] += 1/self.beta_prior['stdev']**2
+        fisher_bs_inv = np.linalg.inv(self.fisher_bs)
+        self.alpha_stdev_bs = np.sqrt(fisher_bs_inv[0,0])
+        self.beta_stdev_bs = np.sqrt(fisher_bs_inv[1,1])
+        return self.fisher_bs
