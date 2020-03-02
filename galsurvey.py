@@ -357,14 +357,16 @@ class survey:
         A2 = np.mean(A2sample)
         return np.sqrt(A2)
 
-    def integrand_bs(self, kargs, mu, z, i, j, coordinate='cartesian', simplify=False):
+    def integrand_bs(self, kmuargs, z, i, j, coordinate='cartesian', simplify=False):
         if coordinate == 'cartesian':
+            k1, k2, k3, mu = kmuargs
+            kargs = (k1, k2, k3)
             db = self.bispectrum_derivative(kargs, mu=mu, z=z, coordinate=coordinate)
             integrand_db = db[i]*db[j]
-            k1, k2, k3 = kargs
             p1, p2, p3 = self.power_spectrum(k1, mu=mu, z=z), self.power_spectrum(k2, mu=mu, z=z), self.power_spectrum(k3, mu=mu, z=z)
             integrand_cov = k1*k2*k3*beta(cost(*kargs))/s123(*kargs)/(p1*p2*p3)
             integrand = integrand_db*integrand_cov
+            #print(integrand, kargs)
             return integrand
         elif coordinate == 'child18':
             pass
@@ -372,7 +374,7 @@ class survey:
     def naive_integration_bs(self, args, coordinate='cartesian'):
         res = 0
         for kmuargs in self.kkkmu_list:
-            res += self.integrand_bs(*kmuargs, *args, coordinate=coordinate)
+            res += self.integrand_bs(kmuargs, *args, coordinate=coordinate)
         if coordinate == 'cartesian':
             res *= self.dk1*self.dk2*self.dk3
             return res
@@ -418,6 +420,7 @@ class survey:
 
             fisher_temp[1, 0] = fisher_temp[0, 1]
             fisher_bs_list[self.zmid_list==z] = fisher_temp
+            print(fisher_temp)
         
         self.fisher_bs_list = np.array(fisher_bs_list)
         self.fisher_bs = np.sum(fisher_bs_list, axis=0)
