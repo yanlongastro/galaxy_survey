@@ -291,8 +291,9 @@ class survey:
             b) -- not defined: treat ng = Ng/V
         """
         fisher_ps_list = np.zeros((len(self.zmid_list), 2, 2))
-        fisher_temp = np.zeros((2,2))
+        
         for z in self.zmid_list:
+            fisher_temp = np.zeros((2,2))
             if z+self.dz/2 <= self.z_max_int:
                 v = self.survey_volume(self.f_sky, z-self.dz/2, z+self.dz/2)
             else:
@@ -329,7 +330,7 @@ class survey:
             #fisher_temp[1, 0] = fisher_temp[0, 1]
             #print(fisher_temp)
             fisher_ps_list[self.zmid_list==z] = fisher_temp
-
+            #print('\t', z, v, fisher_temp[1,1], self.naive_integration_ps(args=(z,), parallel=parallel))
         self.fisher_ps_list = np.array(fisher_ps_list)
         self.fisher_ps = np.sum(fisher_ps_list, axis=0)
         if addprior == True:
@@ -406,7 +407,20 @@ class survey:
             #print(integrand, kargs)
             return integrand
         elif coordinate == 'child18':
-            pass
+            integrand_db = np.zeros((2, 2))
+            k1, delta, theta, mu = kmuargs
+            k1, k2, k3 = k1_tf(k1, delta, theta), k2_tf(k1, delta, theta), k3_tf(k1, delta, theta), 
+            kargs = (k1, delta, theta)
+            db = self.bispectrum_derivative(kargs, mu=mu, z=z, coordinate=coordinate)
+            for i in range(2):
+                for j in range(2):
+                    integrand_db[i,j] = db[i]*db[j]
+            p1, p2, p3 = self.power_spectrum(k1, mu=mu, z=z), self.power_spectrum(k2, mu=mu, z=z), self.power_spectrum(k3, mu=mu, z=z)
+            integrand_cov = (k1*k2)**2*np.sin(theta) *beta(np.cos(theta))/s123(k1, k2, k3)/(p1*p2*p3)
+            integrand = integrand_db*integrand_cov
+            #print(integrand, kargs)
+            return integrand
+            
 
     def naive_integration_bs(self, args, coordinate='cartesian'):
         res = 0
@@ -416,7 +430,16 @@ class survey:
             res *= self.dk1*self.dk2*self.dk3
             return res
         elif coordinate == 'child18':
-            pass
+            res *= self.dk1*self.ddelta*self.dtheta
+            return res
+
+    def integrand_delta_theta(self, delta, theta, k1_min=0.01, k1_max=0.2, div_k1=19):
+        res = 0.0
+        dk1 = (k1_max-k1_min)/div_k1
+        k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
+        for k1 in k1_list:
+            res += self.integrand_bs((k1, delta, theta, 0), z=0, coordinate='child18')
+        return res*dk1
 
     def fisher_matrix_bs(self, regions, coordinate='cartesian', addprior=True, tol=1e-4, rtol=1e-4, div_k1=0, div_k2=0, div_k3=0, div_mu=0, unique=True):
         """
@@ -425,8 +448,9 @@ class survey:
                 - add child18 coordinate
         """
         fisher_bs_list = np.zeros((len(self.zmid_list), 2, 2))
-        fisher_temp = np.zeros((2,2))
+        
         for z in self.zmid_list:
+            fisher_temp = np.zeros((2,2))
             if z+self.dz/2 <= self.z_max_int:
                 v = self.survey_volume(self.f_sky, z-self.dz/2, z+self.dz/2)
             else:
