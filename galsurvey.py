@@ -15,6 +15,8 @@ from scipy import misc
 from scipy import integrate
 import functools
 import itertools
+import pathos.pools as pp
+from multiprocessing import cpu_count
 
 
 def f_phase(k): 
@@ -45,12 +47,11 @@ def f_kernal(k1, k2, cos12):
 
 def s123(k1, k2, k3):
     if k1==k2==k3:
-        s123 = 6
+        return 6
     elif k1==k2 or k2==k3 or k3==k1:
-        s123 = 2
+        return 2
     else:
-        s123 = 1
-    return s123
+        return 1
     
 
 class cosmology:
@@ -124,6 +125,8 @@ class survey:
     todos:  - add a fiducial cosmology
             - add survey_type
             - add priors to power/bispectrum calculations: should only affect oscillation parts
+            - what if (kmax -kmin)/dk != integar?
+            - try other integration methods: e.g., simps
     """
     def __init__(self, cosmo, ps, survey_geometrics, survey_parameters, ingredients, priors):
         self.cosmo = cosmo
@@ -141,6 +144,7 @@ class survey:
         if hasattr(self, 'ng_z_list'):
             self.z_min = self.ng_z_list[0,0] - self.dz/2
             self.z_max = self.ng_z_list[-1,0] + self.dz/2
+            self.z_max_int = self.z_max
         self.V_tot = self.survey_volume(self.f_sky, self.z_min, self.z_max)
 
         if self.survey_type == 'spectroscopic':
@@ -149,8 +153,11 @@ class survey:
                 self.zmid_list = self.ng_z_list[:,0]
             else:
                 self.ng = lambda x: self.N_g/self.V_tot
-                number_z = int(np.ceil((self.z_max-self.z_min)/self.dz))
-                self.zmid_list = np.linspace(self.z_min+self.dz/2, self.z_max-self.dz/2, num=number_z)
+                number_z = int(np.floor((self.z_max-self.z_min)/self.dz))
+                self.z_max_int = self.z_min+self.dz*number_z
+                self.zmid_list = np.linspace(self.z_min+self.dz/2, self.z_max_int-self.dz/2, num=number_z)
+                if self.z_max_int != self.z_max:
+                    self.zmid_list = np.append(self.zmid_list, (self.z_max+self.z_max_int)/2.0)
         else:
             pass
 
@@ -228,8 +235,12 @@ class survey:
         return np.array([dpd_alpha, dpd_beta])
 
     @functools.lru_cache(maxsize=None)
-    def integrand_ps(self, k, mu, z, i, j, simplify=False):
+    def integrand_ps(self, k, mu, z, simplify=False):
+        """
+        return a matrix
+        """
         if simplify is True:
+            integrand_do = np.zeros((2,2))
             k_t = k/self.alpha_prior['mean'] + (self.beta_prior['mean']-1)*f_phase(k)/self.cosmo.s_f
             dodk = misc.derivative(self.ps.oscillation_part, k_t, dx=1e-6)
             damp = self.damping_factor(k, mu, z)
@@ -237,68 +248,85 @@ class survey:
             dod_alpha = dodk*(-k/self.alpha_prior['mean']**2)
             dod_beta = dodk*(f_phase(k)/self.cosmo.s_f)
             do = np.array([dod_alpha, dod_beta])
-            integrand_do = do[i]*do[j]
+            #integrand_do = do[i]*do[j]
+            for i in range(2):
+                for j in range(2):
+                    integrand_do[i,j] = do[i]*do[j]
             integrand_cov = 1/(1+self.ps.oscillation_part(k)*damp)**2/(1+1/(self.ng(z)*self.power_spectrum(k, mu, z)))**2
             integrand = integrand_do*integrand_cov* k**2
             return integrand
+        integrand_dp = np.zeros((2,2))
         dp = self.power_spectrum_derivative(k, mu, z)
-        integrand_dp = dp[i]*dp[j]
+        #integrand_dp = dp[i]*dp[j]
+        for i in range(2):
+            for j in range(2):
+                integrand_dp[i,j] = dp[i]*dp[j]
         integrand_cov = 1/(self.power_spectrum(k, mu, z)+1/self.ng(z))**2
         integrand = integrand_dp*integrand_cov* k**2
         return integrand
 
 
-    def naive_integration_ps(self, args):
+    def naive_integration_ps(self, args, parallel=False):
         res = 0
-        for kmu in self.kmu_list:
-            res += self.integrand_ps(*kmu, *args)
+        if parallel == True:
+            pool = pp.ProcessPool(cpu_count())
+            z_list = [args for x in self.kmu_list]
+            z_list = [x for x, in z_list]
+            k_list = [x for x, y in self.kmu_list]
+            mu_list = [y for x, y in self.kmu_list]
+            results = pool.uimap(self.integrand_ps, k_list, mu_list, z_list)
+            #results = [self.integrand_ps(*x) for x in kmuz_list]
+            res = sum(list(results))
+        else:
+            for kmu in self.kmu_list:
+                res += self.integrand_ps(*kmu, *args)
         res *= self.dk*self.dmu
         return res
 
-    def fisher_matrix_ps(self, regions, addprior=True, tol=1e-4, rtol=1e-4, div_k=0, div_mu=0):
+    def fisher_matrix_ps(self, regions, addprior=True, tol=1e-4, rtol=1e-4, div_k=0, div_mu=0, parallel=False):
         """
         input: 1d numpy arrays
         refer __init__():
             a) ng_z_list defined: ng = ng(z)
             b) -- not defined: treat ng = Ng/V
         """
-
         fisher_ps_list = np.zeros((len(self.zmid_list), 2, 2))
         fisher_temp = np.zeros((2,2))
         for z in self.zmid_list:
-            v = self.survey_volume(self.f_sky, z-self.dz/2, z+self.dz/2)
-            #print(z)
-            for i in range(2):
-                for j in range(i, 2):
-                    if 'RSD' not in self.ingredients:
-                        for subregion in regions:
-                            k_min = subregion['k_min']
-                            k_max = subregion['k_max']
-                            if div_k !=0:
-                                self.dk = dk = (k_max-k_min)/div_k
-                                self.dmu = 1.0
-                                k_list = np.linspace(k_min+dk/2, k_max-dk/2, num=div_k)
-                                mu_list = np.array([0.0])
-                                self.kmu_list = list(itertools.product(k_list, mu_list))
-                                fisher_temp[i,j] = v/(4*np.pi**2)*self.naive_integration_ps(args=(z, i, j))
-                            else:
-                                fisher_temp[i,j] += v/(4*np.pi**2)*integrate.quad(self.integrand_ps, k_min, k_max, args=(0, z, i, j), limit=1000, epsrel=rtol, epsabs=tol)[0]
+            if z+self.dz/2 <= self.z_max_int:
+                v = self.survey_volume(self.f_sky, z-self.dz/2, z+self.dz/2)
+            else:
+                v = self.survey_volume(self.f_sky, self.z_max_int, self.z_max)
+            
+            if 'RSD' not in self.ingredients:
+                for subregion in regions:
+                    k_min = subregion['k_min']
+                    k_max = subregion['k_max']
+                    if div_k !=0:
+                        self.dk = dk = (k_max-k_min)/div_k
+                        self.dmu = 1.0
+                        k_list = np.linspace(k_min+dk/2, k_max-dk/2, num=div_k)
+                        mu_list = np.array([0.0])
+                        self.kmu_list = list(itertools.product(k_list, mu_list))
+                        fisher_temp += v/(4*np.pi**2)*self.naive_integration_ps(args=(z,), parallel=parallel)
                     else:
-                        for subregion in regions:
-                            k_min = subregion['k_min']
-                            k_max = subregion['k_max']
-                            mu_min = subregion['mu_min']
-                            mu_max = subregion['mu_max']
-                            if div_k !=0 and div_mu!=0:
-                                self.dk = dk = (k_max-k_min)/div_k
-                                self.dmu = dmu = (mu_max-mu_min)/div_mu
-                                k_list = np.linspace(k_min+dk/2, k_max-dk/2, num=div_k)
-                                mu_list = np.linspace(mu_min+dmu/2, mu_max-dmu/2, num=div_mu)
-                                self.kmu_list = list(itertools.product(k_list, mu_list))
-                                fisher_temp[i,j] = v/(8*np.pi**2)*self.naive_integration_ps(args=(z, i, j))
-                            else:
-                                fisher_temp[i,j] += v/(8*np.pi**2)*integrate.dblquad(self.integrand_ps, mu_min, mu_max, lambda mu: k_min, lambda mu: k_max, args=(z, i, j), epsabs=tol, epsrel=rtol)[0]
-            fisher_temp[1, 0] = fisher_temp[0, 1]
+                        fisher_temp += v/(4*np.pi**2)*integrate.quad(self.integrand_ps, k_min, k_max, args=(0, z,), limit=1000, epsrel=rtol, epsabs=tol)[0]
+            else:
+                for subregion in regions:
+                    k_min = subregion['k_min']
+                    k_max = subregion['k_max']
+                    mu_min = subregion['mu_min']
+                    mu_max = subregion['mu_max']
+                    if div_k !=0 and div_mu!=0:
+                        self.dk = dk = (k_max-k_min)/div_k
+                        self.dmu = dmu = (mu_max-mu_min)/div_mu
+                        k_list = np.linspace(k_min+dk/2, k_max-dk/2, num=div_k)
+                        mu_list = np.linspace(mu_min+dmu/2, mu_max-dmu/2, num=div_mu)
+                        self.kmu_list = list(itertools.product(k_list, mu_list))
+                        fisher_temp += v/(8*np.pi**2)*self.naive_integration_ps(args=(z,), parallel=parallel)
+                    else:
+                        fisher_temp += v/(8*np.pi**2)*integrate.dblquad(self.integrand_ps, mu_min, mu_max, lambda mu: k_min, lambda mu: k_max, args=(z,), epsabs=tol, epsrel=rtol)[0]
+            #fisher_temp[1, 0] = fisher_temp[0, 1]
             #print(fisher_temp)
             fisher_ps_list[self.zmid_list==z] = fisher_temp
 
@@ -332,14 +360,14 @@ class survey:
         """
         if coordinate =='cartesian':
             k_1, k_2, k_3 = kargs
-            cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
-            f12, f23, f31 = f_kernal(k_1, k_2, cos12), f_kernal(k_2, k_3, cos23), f_kernal(k_3, k_1, cos31)
-            p1, p2, p3 = self.power_spectrum(k_1, mu=mu, z=z), self.power_spectrum(k_2, mu=mu, z=z), self.power_spectrum(k_3, mu=mu, z=z)
-            dp1, dp2, dp3 = self.power_spectrum_derivative(k_1, mu=mu, z=z), self.power_spectrum_derivative(k_2, mu=mu, z=z), self.power_spectrum_derivative(k_3, mu=mu, z=z)
-            res = 2*((dp1*p2+p1*dp2)*f12 +(dp2*p3+p2*dp3)*f23+(dp3*p1+p3*dp1)*f31)
-            return res
         elif coordinate =='child18':
-            pass
+            k_1, k_2, k_3 = k1_tf(*kargs), k2_tf(*kargs), k3_tf(*kargs)
+        cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
+        f12, f23, f31 = f_kernal(k_1, k_2, cos12), f_kernal(k_2, k_3, cos23), f_kernal(k_3, k_1, cos31)
+        p1, p2, p3 = self.power_spectrum(k_1, mu=mu, z=z), self.power_spectrum(k_2, mu=mu, z=z), self.power_spectrum(k_3, mu=mu, z=z)
+        dp1, dp2, dp3 = self.power_spectrum_derivative(k_1, mu=mu, z=z), self.power_spectrum_derivative(k_2, mu=mu, z=z), self.power_spectrum_derivative(k_3, mu=mu, z=z)
+        res = 2*((dp1*p2+p1*dp2)*f12 +(dp2*p3+p2*dp3)*f23+(dp3*p1+p3*dp1)*f31)
+        return res
 
 
 
@@ -357,12 +385,21 @@ class survey:
         A2 = np.mean(A2sample)
         return np.sqrt(A2)
 
-    def integrand_bs(self, kmuargs, z, i, j, coordinate='cartesian', simplify=False):
+    def integrand_bs(self, kmuargs, z, coordinate='cartesian', simplify=False):
+        """
+        todos:
+            - return a 2*2 matrix instead?
+        """
         if coordinate == 'cartesian':
+            integrand_db = np.zeros((2, 2))
             k1, k2, k3, mu = kmuargs
             kargs = (k1, k2, k3)
+            if beta(cost(*kargs)) == 0.0:
+                return 0.0
             db = self.bispectrum_derivative(kargs, mu=mu, z=z, coordinate=coordinate)
-            integrand_db = db[i]*db[j]
+            for i in range(2):
+                for j in range(2):
+                    integrand_db[i,j] = db[i]*db[j]
             p1, p2, p3 = self.power_spectrum(k1, mu=mu, z=z), self.power_spectrum(k2, mu=mu, z=z), self.power_spectrum(k3, mu=mu, z=z)
             integrand_cov = k1*k2*k3*beta(cost(*kargs))/s123(*kargs)/(p1*p2*p3)
             integrand = integrand_db*integrand_cov
@@ -381,7 +418,7 @@ class survey:
         elif coordinate == 'child18':
             pass
 
-    def fisher_matrix_bs(self, regions, coordinate='cartesian', addprior=True, tol=1e-4, rtol=1e-4, div_k1=0, div_k2=0, div_k3=0, div_mu=0):
+    def fisher_matrix_bs(self, regions, coordinate='cartesian', addprior=True, tol=1e-4, rtol=1e-4, div_k1=0, div_k2=0, div_k3=0, div_mu=0, unique=True):
         """
         todos:  - test this method
                 - add RSD
@@ -390,37 +427,41 @@ class survey:
         fisher_bs_list = np.zeros((len(self.zmid_list), 2, 2))
         fisher_temp = np.zeros((2,2))
         for z in self.zmid_list:
-            v = self.survey_volume(self.f_sky, z-self.dz/2, z+self.dz/2)
-            #print(z)
-            for i in range(2):
-                for j in range(i, 2):
-                    if 'RSD' not in self.ingredients:
-                        for subregion in regions:
-                            k1_min = subregion['k1_min']
-                            k1_max = subregion['k1_max']
-                            k2_min = subregion['k2_min']
-                            k2_max = subregion['k2_max']
-                            k3_min = subregion['k3_min']
-                            k3_max = subregion['k3_max']
-                            if div_k1 !=0 and div_k2 !=0 and div_k3 !=0:
-                                self.dk1 = dk1 = (k1_max-k1_min)/div_k1
-                                self.dk2 = dk2 = (k2_max-k2_min)/div_k2
-                                self.dk3 = dk3 = (k3_max-k3_min)/div_k3
-                                self.dmu = 1.0
-                                k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
-                                k2_list = np.linspace(k2_min+dk2/2, k2_max-dk2/2, num=div_k2)
-                                k3_list = np.linspace(k3_min+dk3/2, k3_max-dk3/2, num=div_k3)
-                                mu_list = np.array([0.0])
-                                self.kkkmu_list = list(itertools.product(k1_list, k2_list, k3_list, mu_list))
-                                fisher_temp[i,j] = v/(np.pi)*self.naive_integration_bs(args=(z, i, j), coordinate=coordinate)
-                            else:
-                                pass
+            if z+self.dz/2 <= self.z_max_int:
+                v = self.survey_volume(self.f_sky, z-self.dz/2, z+self.dz/2)
+            else:
+                v = self.survey_volume(self.f_sky, self.z_max_int, self.z_max)
+
+            if 'RSD' not in self.ingredients:
+                for subregion in regions:
+                    k1_min = subregion['k1_min']
+                    k1_max = subregion['k1_max']
+                    k2_min = subregion['k2_min']
+                    k2_max = subregion['k2_max']
+                    k3_min = subregion['k3_min']
+                    k3_max = subregion['k3_max']
+                    if div_k1 !=0 and div_k2 !=0 and div_k3 !=0:
+                        self.dk1 = dk1 = (k1_max-k1_min)/div_k1
+                        self.dk2 = dk2 = (k2_max-k2_min)/div_k2
+                        self.dk3 = dk3 = (k3_max-k3_min)/div_k3
+                        self.dmu = 1.0
+                        k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
+                        k2_list = np.linspace(k2_min+dk2/2, k2_max-dk2/2, num=div_k2)
+                        k3_list = np.linspace(k3_min+dk3/2, k3_max-dk3/2, num=div_k3)
+                        mu_list = np.array([0.0])
+                        kkkmu_list = list(itertools.product(k1_list, k2_list, k3_list, mu_list))
+                        if unique == True:
+                            kkkmu_list = [x for x in kkkmu_list if x[0]<x[1] and x[1]<x[2]]
+                        self.kkkmu_list = kkkmu_list
+                        fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=coordinate)
                     else:
                         pass
+            else:
+                pass
 
-            fisher_temp[1, 0] = fisher_temp[0, 1]
+            #fisher_temp[1, 0] = fisher_temp[0, 1]
             fisher_bs_list[self.zmid_list==z] = fisher_temp
-            print(fisher_temp)
+            print(z, fisher_temp)
         
         self.fisher_bs_list = np.array(fisher_bs_list)
         self.fisher_bs = np.sum(fisher_bs_list, axis=0)
