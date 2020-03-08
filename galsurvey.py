@@ -351,6 +351,8 @@ class survey:
         elif coordinate == 'child18':
             k_1, k_2, k_3 = k1_tf(*kargs), k2_tf(*kargs), k3_tf(*kargs)
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
+        if np.abs(cos12)>1 or np.abs(cos23)>1 or np.abs(cos31)>1:
+            return 0.0
         f12, f23, f31 = f_kernal(k_1, k_2, cos12), f_kernal(k_2, k_3, cos23), f_kernal(k_3, k_1, cos31)
         p1, p2, p3 = self.power_spectrum(k_1, mu=mu, z=z, nw=nw), self.power_spectrum(k_2, mu=mu, z=z, nw=nw), self.power_spectrum(k_3, mu=mu, z=z, nw=nw)
         return 2*(p1*p2*f12+p2*p3*f23+p3*p1*f31)
@@ -364,9 +366,12 @@ class survey:
         elif coordinate =='child18':
             k_1, k_2, k_3 = k1_tf(*kargs), k2_tf(*kargs), k3_tf(*kargs)
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
+        if np.abs(cos12)>1 or np.abs(cos23)>1 or np.abs(cos31)>1:
+            return np.array([0.0, 0.0])
         f12, f23, f31 = f_kernal(k_1, k_2, cos12), f_kernal(k_2, k_3, cos23), f_kernal(k_3, k_1, cos31)
         p1, p2, p3 = self.power_spectrum(k_1, mu=mu, z=z), self.power_spectrum(k_2, mu=mu, z=z), self.power_spectrum(k_3, mu=mu, z=z)
         dp1, dp2, dp3 = self.power_spectrum_derivative(k_1, mu=mu, z=z), self.power_spectrum_derivative(k_2, mu=mu, z=z), self.power_spectrum_derivative(k_3, mu=mu, z=z)
+        #print(dp2, p2, f23, dp3, p3)
         res = 2*((dp1*p2+p1*dp2)*f12 +(dp2*p3+p2*dp3)*f23+(dp3*p1+p3*dp1)*f31)
         return res
 
@@ -396,7 +401,7 @@ class survey:
             k1, k2, k3, mu = kmuargs
             kargs = (k1, k2, k3)
             if beta(cost(*kargs)) == 0.0:
-                return 0.0
+                return np.zeros((2,2))
             db = self.bispectrum_derivative(kargs, mu=mu, z=z, coordinate=coordinate)
             for i in range(2):
                 for j in range(2):
@@ -433,12 +438,15 @@ class survey:
             res *= self.dk1*self.ddelta*self.dtheta
             return res
 
-    def integrand_delta_theta(self, delta, theta, k1_min=0.01, k1_max=0.2, div_k1=19):
+    def integrand_2d(self, args, k1_min=0.01, k1_max=0.2, div_k1=19, z=0, coordinate='child18'):
+        """
+        args can be k2 k3 or delta theta
+        """
         res = 0.0
         dk1 = (k1_max-k1_min)/div_k1
         k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
         for k1 in k1_list:
-            res += self.integrand_bs((k1, delta, theta, 0), z=0, coordinate='child18')
+            res += self.integrand_bs((k1, *args, 0), z=z, coordinate=coordinate)
         return res*dk1
 
     def fisher_matrix_bs(self, regions, coordinate='cartesian', addprior=True, tol=1e-4, rtol=1e-4, div_k1=0, div_k2=0, div_k3=0, div_mu=0, unique=True):
