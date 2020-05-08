@@ -20,7 +20,7 @@ from multiprocessing import cpu_count
 
 
 def f_phase(k): 
-    return 0.227/(1+(0.0324/k)**0.872)
+    return 0.227*k**0.872/(k**0.872+0.0324**0.872)
 
 def k1_tf(k1, delta, theta):
     return k1
@@ -38,12 +38,22 @@ def beta(x):
         return 1
     else:
         return 0
+beta = np.vectorize(beta)
+
+
+def is_zero(x):
+    if x ==0:
+        return 0.0
+    else:
+        return 1.0
+is_zero = np.vectorize(is_zero)
 
 def cost(k1, k2, k3):
     return (k3**2-k1**2-k2**2)/(2*k1*k2)
 
 def f_kernal(k1, k2, cos12):
     return 5./7.+.5*(k1/k2+k2/k1)*cos12+2./7.*cos12**2
+
 
 def s123(k1, k2, k3):
     if k1==k2==k3:
@@ -110,13 +120,15 @@ class ps_interpolation:
         pnw_func_loglog = interpolate.interp1d(pnwdata_log[:,0], pnwdata_log[:,1], fill_value="extrapolate")
         self.matter_power_spectrum_no_wiggle = lambda x: 10**(pnw_func_loglog(np.log10(x)))
         oscdata = np.transpose([pdata[:,0], pdata[:,1]/pnwdata[:,1]-1])
-        self.oscillation_part = interpolate.interp1d(oscdata[:,0], oscdata[:,1], fill_value="extrapolate")
+        osc = interpolate.interp1d(oscdata[:,0], oscdata[:,1], fill_value="extrapolate")
+        self.oscillation_part = osc
+        #self.matter_power_spectrum = lambda x: self.matter_power_spectrum_no_wiggle(x)*(1+osc(x))
 
 
 class survey:
     """
-    attribute later >cosmo: cosmology class
-    attribute later>ps: ps_interpolation class
+    cosmo: cosmology class
+    ps: ps_interpolation class
     survey geometrics (dict): f_sky, N_g, z_min, z_max, dz, ng_z_list ([zmid_list, ng_list])
     survey parameters (dict): Sigma_0, reconstruction_rate, b_0, survey_type
     ingredients (list): 'RSD', 'damping', 'FOG', 'galactic_bias'
@@ -124,8 +136,6 @@ class survey:
 
     todos:  - add a fiducial cosmology
             - add survey_type
-            - add priors to power/bispectrum calculations: should only affect oscillation parts
-            - what if (kmax -kmin)/dk != integar?
             - try other integration methods: e.g., simps
     """
     def __init__(self, cosmo, ps, survey_geometrics, survey_parameters, ingredients, priors):
@@ -351,11 +361,9 @@ class survey:
         elif coordinate == 'child18':
             k_1, k_2, k_3 = k1_tf(*kargs), k2_tf(*kargs), k3_tf(*kargs)
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
-        if np.abs(cos12)>1 or np.abs(cos23)>1 or np.abs(cos31)>1:
-            return 0.0
         f12, f23, f31 = f_kernal(k_1, k_2, cos12), f_kernal(k_2, k_3, cos23), f_kernal(k_3, k_1, cos31)
         p1, p2, p3 = self.power_spectrum(k_1, mu=mu, z=z, nw=nw), self.power_spectrum(k_2, mu=mu, z=z, nw=nw), self.power_spectrum(k_3, mu=mu, z=z, nw=nw)
-        return 2*(p1*p2*f12+p2*p3*f23+p3*p1*f31)
+        return 2*(p1*p2*f12+p2*p3*f23+p3*p1*f31) *is_zero(beta(cos12)*beta(cos23)*beta(cos31))
 
     def bispectrum_derivative(self, kargs, mu=0, z=0, coordinate='cartesian'):
         """
@@ -393,8 +401,6 @@ class survey:
 
     def integrand_bs(self, kmuargs, z, coordinate='cartesian', simplify=False):
         """
-        todos:
-            - return a 2*2 matrix instead?
         """
         if coordinate == 'cartesian':
             integrand_db = np.zeros((2, 2))
@@ -449,11 +455,12 @@ class survey:
             res += self.integrand_bs((k1, *args, 0), z=z, coordinate=coordinate)
         return res*dk1
 
-    def fisher_matrix_bs(self, regions, coordinate='cartesian', addprior=True, tol=1e-4, rtol=1e-4, div_k1=0, div_k2=0, div_k3=0, div_mu=0, unique=True):
+    def fisher_matrix_bs(self, regions, coordinate='cartesian', addprior=True, tol=1e-4, rtol=1e-4, div_k1=0, div_k2=0, div_k3=0, div_delta=0, div_theta=0, div_mu=0, unique=True):
         """
         todos:  - test this method
                 - add RSD
-                - add child18 coordinate
+                - the upper bound of k1 is probably too small
+                - check higher orders; or SPT alternative
         """
         fisher_bs_list = np.zeros((len(self.zmid_list), 2, 2))
         
@@ -468,11 +475,18 @@ class survey:
                 for subregion in regions:
                     k1_min = subregion['k1_min']
                     k1_max = subregion['k1_max']
-                    k2_min = subregion['k2_min']
-                    k2_max = subregion['k2_max']
-                    k3_min = subregion['k3_min']
-                    k3_max = subregion['k3_max']
-                    if div_k1 !=0 and div_k2 !=0 and div_k3 !=0:
+                    if coordinate == 'cartesian':
+                        k2_min = subregion['k2_min']
+                        k2_max = subregion['k2_max']
+                        k3_min = subregion['k3_min']
+                        k3_max = subregion['k3_max']
+                    elif coordinate == 'child18':
+                        delta_min = subregion['delta_min']
+                        delta_max = subregion['delta_max']
+                        theta_min = subregion['theta_min']
+                        theta_max = subregion['theta_max']
+
+                    if div_k1 !=0 and div_k2 !=0 and div_k3 !=0 and coordinate=='cartesian':
                         self.dk1 = dk1 = (k1_max-k1_min)/div_k1
                         self.dk2 = dk2 = (k2_max-k2_min)/div_k2
                         self.dk3 = dk3 = (k3_max-k3_min)/div_k3
@@ -484,6 +498,21 @@ class survey:
                         kkkmu_list = list(itertools.product(k1_list, k2_list, k3_list, mu_list))
                         if unique == True:
                             kkkmu_list = [x for x in kkkmu_list if x[0]<x[1] and x[1]<x[2]]
+                        self.kkkmu_list = kkkmu_list
+                        fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=coordinate)
+                    
+                    if div_k1 !=0 and div_delta !=0 and div_theta !=0 and coordinate=='child18':
+                        self.dk1 = dk1 = (k1_max-k1_min)/div_k1
+                        self.ddelta = ddelta = (delta_max-delta_min)/div_delta
+                        self.dtheta = dtheta = (theta_max-theta_min)/div_theta
+                        self.dmu = 1.0
+                        k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
+                        delta_list = np.linspace(delta_min+ddelta/2, delta_max-ddelta/2, num=div_delta)
+                        theta_list = np.linspace(theta_min+dtheta/2, theta_max-dtheta/2, num=div_theta)
+                        mu_list = np.array([0.0])
+                        kkkmu_list = list(itertools.product(k1_list, delta_list, theta_list, mu_list))
+                        if unique == True:
+                            kkkmu_list = [x for x in kkkmu_list if k1_tf(*x[:3])<k2_tf(*x[:3]) and k2_tf(*x[:3])<k3_tf(*x[:3])]
                         self.kkkmu_list = kkkmu_list
                         fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=coordinate)
                     else:
