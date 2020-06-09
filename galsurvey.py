@@ -17,7 +17,8 @@ from scipy import stats
 import functools
 import itertools
 import pathos.pools as pp
-from multiprocessing import cpu_count
+from multiprocessing import cpu_count, Pool
+import time
 
 
 def f_phase(k): 
@@ -454,8 +455,8 @@ class survey:
                 res *= self.dk1*self.ddelta*self.dtheta
                 return res
         if method in ['simpson', 'trapezoidal']:
-            ints = np.zeros((self.k1_list.shape[0], self.k2_list.shape[0], self.k3_list.shape[0], self.mu_list.shape[0], 2, 2))
-            print(ints.shape)
+            if coordinate == 'cartesian':
+                ints = np.zeros((self.k1_list.shape[0], self.k2_list.shape[0], self.k3_list.shape[0], self.mu_list.shape[0], 2, 2))
             i = j = k = l = 0
             for k1 in self.k1_list:
                 j = 0
@@ -476,11 +477,15 @@ class survey:
 
             self.ints = ints
 
+            
+
             ints = int_func(ints, self.k1_list, axis=0)
             ints = int_func(ints, self.k2_list, axis=0)
             ints = int_func(ints, self.k3_list, axis=0)
             #ints = int_func(ints, self.mu_list, axis=0)
             ints = ints[0]
+
+            
             return ints
 
     def integrand_2d(self, args, k1_min=0.01, k1_max=0.2, div_k1=19, z=0, coordinate='child18'):
@@ -537,7 +542,7 @@ class survey:
                             self.k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
                             self.k2_list = np.linspace(k2_min+dk2/2, k2_max-dk2/2, num=div_k2)
                             self.k3_list = np.linspace(k3_min+dk3/2, k3_max-dk3/2, num=div_k3)
-                        if method in ['simpson' or 'trapezoidal']:
+                        if method in ['simpson', 'trapezoidal']:
                             self.k1_list = np.linspace(k1_min, k1_max, num=div_k1)
                             self.k2_list = np.linspace(k2_min, k2_max, num=div_k2)
                             self.k3_list = np.linspace(k3_min, k3_max, num=div_k3)
@@ -560,11 +565,18 @@ class survey:
                         self.ddelta = ddelta = (delta_max-delta_min)/div_delta
                         self.dtheta = dtheta = (theta_max-theta_min)/div_theta
                         self.dmu = 1.0
-                        k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
-                        delta_list = np.linspace(delta_min+ddelta/2, delta_max-ddelta/2, num=div_delta)
-                        theta_list = np.linspace(theta_min+dtheta/2, theta_max-dtheta/2, num=div_theta)
+                        if method in ['naive']:
+                            self.k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
+                            self.delta_list = np.linspace(delta_min+ddelta/2, delta_max-ddelta/2, num=div_delta)
+                            self.theta_list = np.linspace(theta_min+dtheta/2, theta_max-dtheta/2, num=div_theta)
+                        if method in ['simpson', 'trapezoidal']:
+                            self.k1_list = np.linspace(k1_min, k1_max, num=div_k1)
+                            self.delta_list = np.linspace(delta_min, delta_max, num=div_delta)
+                            self.theta_list = np.linspace(theta_min, theta_max, num=div_theta)
+                        #if method in ['monte_carlo']
+
                         mu_list = np.array([0.0])
-                        kkkmu_list = list(itertools.product(k1_list, delta_list, theta_list, mu_list))
+                        kkkmu_list = list(itertools.product(self.k1_list, self.delta_list, self.theta_list, self.mu_list))
                         if unique == True:
                             kkkmu_list = [x for x in kkkmu_list if k1_tf(*x[:3])<k2_tf(*x[:3]) and k2_tf(*x[:3])<k3_tf(*x[:3])]
                         self.kkkmu_list = kkkmu_list
