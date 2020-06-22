@@ -56,6 +56,9 @@ def cost(k1, k2, k3):
 def f_kernal(k1, k2, cos12):
     return 5./7.+.5*(k1/k2+k2/k1)*cos12+2./7.*cos12**2
 
+def g_kernal(k1, k2, cos12):
+    return 3./7.+.5*(k1/k2+k2/k1)*cos12+4./7.*cos12**2
+
 
 def s123(k1, k2, k3):
     if k1==k2==k3:
@@ -213,11 +216,11 @@ class survey:
         damping = np.exp(-0.5*k**2* (Sigma_vertical**2+mu**2*(Sigma_parallel**2-Sigma_vertical**2)))
         return damping
 
-    def rsd_factor(self, z, mu=0.0):
+    def rsd_factor_z1(self, z, mu=0.0):
         if 'RSD' not in self.ingredients:
             return 1.0
         rsd = self.galactic_bias(z) + self.cosmo.linear_growth_rate(z)*mu**2
-        return rsd**2
+        return rsd
 
     def oscillation_part(self, k, mu=0.0, z=0.0, damp=True, priors=True):
         if priors == True:
@@ -226,20 +229,24 @@ class survey:
         osc *= (self.damping_factor(k, mu, z) if damp==True else 1.0)
         return osc
         
-    def power_spectrum(self, k, mu=0.0, z=0.0, nw=False):
+    def power_spectrum(self, k, mu=0.0, z=0.0, nw=False, linear=False, noise=False):
         p = self.ps.matter_power_spectrum_no_wiggle(k)
         if nw==False:
             p *= 1 + self.oscillation_part(k, mu, z)
-        p *= self.rsd_factor(z, mu)
+        if linear==False:
+            p *= self.rsd_factor_z1(z, mu)**2
         p *= (self.cosmo.linear_growth_factor(z)/self.cosmo.D0)**2
+        if noise==True:
+            p += 1/self.ng(z)
         return p
 
-    def power_spectrum_derivative(self, k, mu=0.0, z=0.0):
+    def power_spectrum_derivative(self, k, mu=0.0, z=0.0, linear=False):
         k_t = k/self.alpha_prior['mean'] + (self.beta_prior['mean']-1)*f_phase(k)/self.cosmo.s_f
         dodk = misc.derivative(self.ps.oscillation_part, k_t, dx=1e-6)
         p = self.ps.matter_power_spectrum_no_wiggle(k)
         dpdk = p*dodk
-        dpdk *= self.rsd_factor(z, mu)
+        if linear==False:
+            dpdk *= self.rsd_factor_z1(z, mu)**2
         dpdk *= (self.cosmo.linear_growth_factor(z)/self.cosmo.D0)**2
         dpdk *= self.damping_factor(k, mu, z)
         dpd_alpha = dpdk*(-k/self.alpha_prior['mean']**2)
@@ -273,7 +280,7 @@ class survey:
         for i in range(2):
             for j in range(2):
                 integrand_dp[i,j] = dp[i]*dp[j]
-        integrand_cov = 1/(self.power_spectrum(k, mu, z)+1/self.ng(z))**2
+        integrand_cov = 1/self.power_spectrum(k, mu, z, noise=True)**2
         integrand = integrand_dp*integrand_cov* k**2
         return integrand
 
@@ -354,20 +361,55 @@ class survey:
         return self.fisher_ps
 
 
-    def bispectrum(self, kargs, mu=0, z=0, coordinate='cartesian', nw=False):
+    def rsd_factor_z2(self, k1, k2, cos12, mu1=0, mu2=0, z=0):
+        """
+        Z_2 factor for RSD
+        """
+        f12 = f_kernal(k1, k2, cos12)
+        g12 = g_kernal(k1, k2, cos12)
+        k12 = np.sqrt(k1**2+k2**2+2*k1*k2*cos12)
+        mu12 = (k1*mu1+k2*m2)/k12
+        f = self.cosmo.linear_growth_rate(z)
+        b = self.galactic_bias(z)
+        b2 = 0.0
+        bs2 = 0.0
+        s12 = cos12**2 -1./3.
+        res = b2/2 +b*f12 +f*mu12**2*g12
+        res += f*mu12*k12/2*(mu1/k1*self.rsd_factor_z1(z, mu=mu2) +mu2/k2*self.rsd_factor_z1(z, mu=mu1))
+        res += bs2/2.*s12
+        return res
+
+
+
+
+    def bispectrum(self, kargs, muargs=(0., 0., 0.), z=0., coordinate='cartesian', nw=False, noise=False):
         """
         todos: derive bispectrum in galsurvey, currently the functions should use with no ingredients
+        mu1, mu2, mu3 are not all independent
         """
         if coordinate == 'cartesian':
             k_1, k_2, k_3 = kargs
         elif coordinate == 'child18':
             k_1, k_2, k_3 = k1_tf(*kargs), k2_tf(*kargs), k3_tf(*kargs)
+        mu1, mu2, mu3 = muargs
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
-        f12, f23, f31 = f_kernal(k_1, k_2, cos12), f_kernal(k_2, k_3, cos23), f_kernal(k_3, k_1, cos31)
-        p1, p2, p3 = self.power_spectrum(k_1, mu=mu, z=z, nw=nw), self.power_spectrum(k_2, mu=mu, z=z, nw=nw), self.power_spectrum(k_3, mu=mu, z=z, nw=nw)
-        return 2*(p1*p2*f12+p2*p3*f23+p3*p1*f31) *is_zero(beta(cos12)*beta(cos23)*beta(cos31))
 
-    def bispectrum_derivative(self, kargs, mu=0, z=0, coordinate='cartesian'):
+        z12 = self.rsd_factor_z2(k_1, k_2, cos12, mu1=mu1, mu2=mu2, z=z)
+        z23 = self.rsd_factor_z2(k_2, k_3, cos23, mu1=mu2, mu2=mu3, z=z)
+        z31 = self.rsd_factor_z2(k_3, k_1, cos31, mu1=mu3, mu2=mu1, z=z)
+        z1 = self.rsd_factor_z1(z, mu=mu1)
+        z2 = self.rsd_factor_z1(z, mu=mu2)
+        z3 = self.rsd_factor_z1(z, mu=mu3)
+
+        p1 = self.power_spectrum(k_1, mu=mu1, z=z, nw=nw, linear=True)
+        p2 = self.power_spectrum(k_2, mu=mu2, z=z, nw=nw, linear=True)
+        p3 = self.power_spectrum(k_3, mu=mu3, z=z, nw=nw, linear=True)
+        res = 2*(p1*p2*z12*z1*z2 +p2*p3*z23*z2*z3 +p3*p1*z31*z3*z1) *is_zero(beta(cos12)*beta(cos23)*beta(cos31))
+        if noise==True:
+            res += (p1+p2+p3)/self.ng(z) + 1/self.ng(z)**2
+        return res
+
+    def bispectrum_derivative(self, kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian', nw=False, noise=False):
         """
         will give different results depending on the coordinate
         """
@@ -375,14 +417,30 @@ class survey:
             k_1, k_2, k_3 = kargs
         elif coordinate =='child18':
             k_1, k_2, k_3 = k1_tf(*kargs), k2_tf(*kargs), k3_tf(*kargs)
+        mu1, mu2, mu3 = kargs
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
+
         if np.abs(cos12)>1 or np.abs(cos23)>1 or np.abs(cos31)>1:
             return np.array([0.0, 0.0])
-        f12, f23, f31 = f_kernal(k_1, k_2, cos12), f_kernal(k_2, k_3, cos23), f_kernal(k_3, k_1, cos31)
-        p1, p2, p3 = self.power_spectrum(k_1, mu=mu, z=z), self.power_spectrum(k_2, mu=mu, z=z), self.power_spectrum(k_3, mu=mu, z=z)
-        dp1, dp2, dp3 = self.power_spectrum_derivative(k_1, mu=mu, z=z), self.power_spectrum_derivative(k_2, mu=mu, z=z), self.power_spectrum_derivative(k_3, mu=mu, z=z)
-        #print(dp2, p2, f23, dp3, p3)
-        res = 2*((dp1*p2+p1*dp2)*f12 +(dp2*p3+p2*dp3)*f23+(dp3*p1+p3*dp1)*f31)
+        
+        z12 = self.rsd_factor_z2(k_1, k_2, cos12, mu1=mu1, mu2=mu2, z=z)
+        z23 = self.rsd_factor_z2(k_2, k_3, cos23, mu1=mu2, mu2=mu3, z=z)
+        z31 = self.rsd_factor_z2(k_3, k_1, cos31, mu1=mu3, mu2=mu1, z=z)
+        z1 = self.rsd_factor_z1(z, mu=mu1)
+        z2 = self.rsd_factor_z1(z, mu=mu2)
+        z3 = self.rsd_factor_z1(z, mu=mu3)
+
+        p1 = self.power_spectrum(k_1, mu=mu1, z=z, nw=nw, linear=True)
+        p2 = self.power_spectrum(k_2, mu=mu2, z=z, nw=nw, linear=True)
+        p3 = self.power_spectrum(k_3, mu=mu3, z=z, nw=nw, linear=True)
+
+        dp1 = self.power_spectrum_derivative(k_1, mu=mu1, z=z, linear=True)
+        dp2 = self.power_spectrum_derivative(k_2, mu=mu2, z=z, linear=True)
+        dp3 = self.power_spectrum_derivative(k_3, mu=mu3, z=z, linear=True)
+        
+        res = 2*((dp1*p2+p1*dp2)*z12*z1*z2 +(dp2*p3+p2*dp3)*z23*z2*z3 +(dp3*p1+p3*dp1)*z31*z3*z1)
+        if noise==True:
+            res += (dp1+dp2+dp3)/self.ng(z)
         return res
 
 
@@ -401,7 +459,7 @@ class survey:
         A2 = np.mean(A2sample)
         return np.sqrt(A2)
 
-    def integrand_bs(self, kmuargs, z, coordinate='cartesian', simplify=False):
+    def integrand_bs(self, kmuargs, z, coordinate='cartesian', simplify=False, noise=True):
         """
         """
         if coordinate == 'cartesian':
@@ -410,11 +468,11 @@ class survey:
             kargs = (k1, k2, k3)
             if beta(cost(*kargs)) == 0.0:
                 return np.zeros((2,2))
-            db = self.bispectrum_derivative(kargs, mu=mu, z=z, coordinate=coordinate)
+            db = self.bispectrum_derivative(kargs, mu=mu, z=z, coordinate=coordinate, noise=noise)
             for i in range(2):
                 for j in range(2):
                     integrand_db[i,j] = db[i]*db[j]
-            p1, p2, p3 = self.power_spectrum(k1, mu=mu, z=z), self.power_spectrum(k2, mu=mu, z=z), self.power_spectrum(k3, mu=mu, z=z)
+            p1, p2, p3 = self.power_spectrum(k1, mu=mu, z=z, noise=noise), self.power_spectrum(k2, mu=mu, z=z, noise=noise), self.power_spectrum(k3, mu=mu, z=z, noise=noise)
             integrand_cov = k1*k2*k3*beta(cost(*kargs))/s123(*kargs)/(p1*p2*p3)
             integrand = integrand_db*integrand_cov
             #print(integrand, kargs)
@@ -424,11 +482,11 @@ class survey:
             k1, delta, theta, mu = kmuargs
             k1, k2, k3 = k1_tf(k1, delta, theta), k2_tf(k1, delta, theta), k3_tf(k1, delta, theta), 
             kargs = (k1, delta, theta)
-            db = self.bispectrum_derivative(kargs, mu=mu, z=z, coordinate=coordinate)
+            db = self.bispectrum_derivative(kargs, mu=mu, z=z, coordinate=coordinate, noise=noise)
             for i in range(2):
                 for j in range(2):
                     integrand_db[i,j] = db[i]*db[j]
-            p1, p2, p3 = self.power_spectrum(k1, mu=mu, z=z), self.power_spectrum(k2, mu=mu, z=z), self.power_spectrum(k3, mu=mu, z=z)
+            p1, p2, p3 = self.power_spectrum(k1, mu=mu, z=z, noise=noise), self.power_spectrum(k2, mu=mu, z=z, noise=noise), self.power_spectrum(k3, mu=mu, z=z, noise=noise)
             integrand_cov = (k1*k2)**2*np.sin(theta) *beta(np.cos(theta))/s123(k1, k2, k3)/(p1*p2*p3)
             integrand = integrand_db*integrand_cov
             #print(integrand, kargs)
@@ -575,7 +633,7 @@ class survey:
                             self.theta_list = np.linspace(theta_min, theta_max, num=div_theta)
                         #if method in ['monte_carlo']
 
-                        mu_list = np.array([0.0])
+                        self.mu_list = np.array([0.0])
                         kkkmu_list = list(itertools.product(self.k1_list, self.delta_list, self.theta_list, self.mu_list))
                         if unique == True:
                             kkkmu_list = [x for x in kkkmu_list if k1_tf(*x[:3])<k2_tf(*x[:3]) and k2_tf(*x[:3])<k3_tf(*x[:3])]
