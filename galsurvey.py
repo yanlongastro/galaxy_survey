@@ -368,7 +368,7 @@ class survey:
         f12 = f_kernal(k1, k2, cos12)
         g12 = g_kernal(k1, k2, cos12)
         k12 = np.sqrt(k1**2+k2**2+2*k1*k2*cos12)
-        mu12 = (k1*mu1+k2*m2)/k12
+        mu12 = (k1*mu1+k2*mu2)/k12
         f = self.cosmo.linear_growth_rate(z)
         b = self.galactic_bias(z)
         b2 = 0.0
@@ -445,12 +445,12 @@ class survey:
 
 
 
-    def R_bi(self, kargs, mu=0, z=0):
-        return self.bispectrum(kargs, mu=mu, z=z, coordinate='child18')/self.bispectrum(kargs, mu=mu, z=z, coordinate='child18', nw=True)
+    def R_bi(self, kargs, muargs=(0.,0.,0.), z=0):
+        return self.bispectrum(kargs, muargs=muargs, z=z, coordinate='child18')/self.bispectrum(kargs, muargs=muargs, z=z, coordinate='child18', nw=True)
 
-    def A_bi(self, delta, theta, k1_min=0.01, k1_max=0.2, div_k1=10000, mu=0, z=0):
+    def A_bi(self, delta, theta, k1_min=0.01, k1_max=0.2, div_k1=10000, muargs=(0,0,0), z=0):
         k1sample = np.linspace(k1_min, k1_max, num=div_k1)
-        Rsample = self.R_bi(kargs=(k1sample, delta, theta), mu=mu, z=z)
+        Rsample = self.R_bi(kargs=(k1sample, delta, theta), muargs=muargs, z=z)
         Rmean = np.mean(Rsample)
         #Rmean = integrate.quad(R, kmin_bi, kmax_bi, limit=100)[0]/(kmax_bi-kmin_bi)
         #A2 = lambda x: (R(x)-Rmean)**2
@@ -464,29 +464,29 @@ class survey:
         """
         if coordinate == 'cartesian':
             integrand_db = np.zeros((2, 2))
-            k1, k2, k3, mu = kmuargs
+            k1, k2, k3, mu1, mu2, mu3 = kmuargs
             kargs = (k1, k2, k3)
             if beta(cost(*kargs)) == 0.0:
                 return np.zeros((2,2))
-            db = self.bispectrum_derivative(kargs, mu=mu, z=z, coordinate=coordinate, noise=noise)
+            db = self.bispectrum_derivative(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
             for i in range(2):
                 for j in range(2):
                     integrand_db[i,j] = db[i]*db[j]
-            p1, p2, p3 = self.power_spectrum(k1, mu=mu, z=z, noise=noise), self.power_spectrum(k2, mu=mu, z=z, noise=noise), self.power_spectrum(k3, mu=mu, z=z, noise=noise)
+            p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z, noise=noise), self.power_spectrum(k2, mu=mu2, z=z, noise=noise), self.power_spectrum(k3, mu=mu3, z=z, noise=noise)
             integrand_cov = k1*k2*k3*beta(cost(*kargs))/s123(*kargs)/(p1*p2*p3)
             integrand = integrand_db*integrand_cov
             #print(integrand, kargs)
             return integrand
         elif coordinate == 'child18':
             integrand_db = np.zeros((2, 2))
-            k1, delta, theta, mu = kmuargs
+            k1, delta, theta, mu1, mu2, mu3 = kmuargs
             k1, k2, k3 = k1_tf(k1, delta, theta), k2_tf(k1, delta, theta), k3_tf(k1, delta, theta), 
             kargs = (k1, delta, theta)
-            db = self.bispectrum_derivative(kargs, mu=mu, z=z, coordinate=coordinate, noise=noise)
+            db = self.bispectrum_derivative(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
             for i in range(2):
                 for j in range(2):
                     integrand_db[i,j] = db[i]*db[j]
-            p1, p2, p3 = self.power_spectrum(k1, mu=mu, z=z, noise=noise), self.power_spectrum(k2, mu=mu, z=z, noise=noise), self.power_spectrum(k3, mu=mu, z=z, noise=noise)
+            p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z, noise=noise), self.power_spectrum(k2, mu=mu2, z=z, noise=noise), self.power_spectrum(k3, mu=mu3, z=z, noise=noise)
             integrand_cov = (k1*k2)**2*np.sin(theta) *beta(np.cos(theta))/s123(k1, k2, k3)/(p1*p2*p3)
             integrand = integrand_db*integrand_cov
             #print(integrand, kargs)
@@ -554,7 +554,7 @@ class survey:
         dk1 = (k1_max-k1_min)/div_k1
         k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
         for k1 in k1_list:
-            res += self.integrand_bs((k1, *args, 0), z=z, coordinate=coordinate)
+            res += self.integrand_bs((k1, *args, 0., 0., 0., ), z=z, coordinate=coordinate)
         return res*dk1
 
     def fisher_matrix_bs(self, regions, coordinate='cartesian', method='naive', addprior=True, tol=1e-4, rtol=1e-4, div_k1=0, div_k2=0, div_k3=0, div_delta=0, div_theta=0, div_mu=0, unique=True):
@@ -627,6 +627,8 @@ class survey:
                             self.k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
                             self.delta_list = np.linspace(delta_min+ddelta/2, delta_max-ddelta/2, num=div_delta)
                             self.theta_list = np.linspace(theta_min+dtheta/2, theta_max-dtheta/2, num=div_theta)
+
+                        # to be developed
                         if method in ['simpson', 'trapezoidal']:
                             self.k1_list = np.linspace(k1_min, k1_max, num=div_k1)
                             self.delta_list = np.linspace(delta_min, delta_max, num=div_delta)
