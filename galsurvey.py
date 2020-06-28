@@ -517,36 +517,24 @@ class survey:
         
         if method in ['simpson', 'trapezoidal']:
             if coordinate == 'cartesian':
-                ints = np.zeros((self.k1_list.shape[0], self.k2_list.shape[0], self.k3_list.shape[0], self.mu_list.shape[0], 2, 2))
-            i = j = k = l = 0
-            for k1 in self.k1_list:
-                j = 0
-                for k2 in self.k2_list:
-                    k = 0
-                    for k3 in self.k3_list:
-                        l = 0
-                        for mu in self.mu_list:
-                            ints[i,j,k,l] = self.integrand_bs((k1, k2, k3, mu), *args, coordinate=coordinate)
-                            l += 1
-                        k += 1
-                    j += 1
-                i += 1
+                ints = np.zeros((len(self.kkkmu_list), 2, 2))
+            for i in range(len(self.kkkmu_list)):
+                kmuargs = self.kkkmu_list[i]
+                ints[i] = self.integrand_bs(kmuargs, *args, coordinate=coordinate)
             if method == 'simpson':
                 int_func = integrate.simps
             if method == 'trapezoidal':
                 int_func = integrate.trapz
-
-            self.ints = ints
-
             
-
+            ints = ints.reshape(*(self.divs), 2, 2)
+            self.ints = ints
             ints = int_func(ints, self.k1_list, axis=0)
             ints = int_func(ints, self.k2_list, axis=0)
             ints = int_func(ints, self.k3_list, axis=0)
-            #ints = int_func(ints, self.mu_list, axis=0)
-            ints = ints[0]
 
-            
+            # check the following, if non-rsd
+            ints = int_func(ints, self.mu1_list, axis=0)
+            ints = int_func(ints, self.mu2_list, axis=0)
             return ints
 
     def integrand_2d(self, args, k1_min=0.01, k1_max=0.2, div_k1=19, z=0, coordinate='child18'):
@@ -560,15 +548,15 @@ class survey:
             res += self.integrand_bs((k1, *args, 0., 0., 0., ), z=z, coordinate=coordinate)
         return res*dk1
 
-    def fisher_matrix_bs(self, regions, method='naive', addprior=True, tol=1e-4, rtol=1e-4, divideby='num', divs=(20, 20, 20, 20, 20), dds=(0, 0, 0, 0, 0), unique=True):
+    def fisher_matrix_bs(self, regions, method='naive', addprior=False, tol=1e-4, rtol=1e-4, divideby='num', divs=(20, 20, 20, 20, 20), dds=(0, 0, 0, 0, 0), unique=True):
         """
         todos:  - test this method
-                - add RSD
                 - the upper bound of k1 is probably too small
                 - check higher orders; or SPT alternative
         """
         """
         integration methods: naive, monte_carlo, simpson, trapezoidal
+        divideby: num, step
         """
         fisher_bs_list = np.zeros((len(self.zmid_list), 2, 2))
         
@@ -583,13 +571,13 @@ class survey:
                 bounds = np.array(subregion['bounds'])
                 if divideby == 'num':
                     self.dds = np.diff(bounds).flatten()/np.array(divs)
-                    divs = np.array(divs)
+                    self.divs = np.array(divs)
                 elif divideby == 'step':
                     self.dds = np.array(dds)
-                    divs = np.round(np.diff(bounds).flatten()/np.array(divs))
+                    self.divs = np.round(np.diff(bounds).flatten()/np.array(dds))
                 if 'RSD' not in self.ingredients:
-                    divs[:-1] = 1
-                    divs[:-2] = 1
+                    self.divs[:-1] = 1
+                    self.divs[:-2] = 1
                     self.dds[:-1] = 1.0
                     self.dds[:-2] = 1.0
                 if subregion['coordinate'] == 'cartesian':
@@ -600,11 +588,11 @@ class survey:
                 for key in keys:
                     i += 1
                     if method in ['naive']:
-                        temp_list = np.linspace((bounds[:,0]+self.dds/2)[i], (bounds[:,1]+self.dds/2)[i], num=divs[i])
-                    if method in if method in ['simpson', 'trapezoidal']:
-                        temp_list = np.linspace((bounds[:,0])[i], (bounds[:,1])[i], num=divs[i])
+                        temp_list = np.linspace((bounds[:,0]+self.dds/2)[i], (bounds[:,1]+self.dds/2)[i], num=self.divs[i])
+                    if method in ['simpson', 'trapezoidal']:
+                        temp_list = np.linspace((bounds[:,0])[i], (bounds[:,1])[i], num=self.divs[i])
                     if method in ['monte_carlo']:
-                        temp_list = stats.uniform.rvs(loc=bounds[:,0])[i], scale=bounds[:,1])[i]-bounds[:,0])[i], size=divs[i])                    
+                        temp_list = stats.uniform.rvs(loc=bounds[:,0])[i], scale=(bounds[:,1])[i]-(bounds[:,0])[i], size=self.divs[i])                    
                     setattr(self, key+'_list', temp_list)
 
                 if subregion['coordinate'] == 'cartesian':
@@ -620,80 +608,6 @@ class survey:
                 self.kkkmu_list = kkkmu_list
                 fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=subregion['coordinate'], method=method)
 
-
-            
-
-            # if 'RSD' not in self.ingredients:
-            #     for subregion in regions:
-            #         k1_min = subregion['k1_min']
-            #         k1_max = subregion['k1_max']
-            #         if coordinate == 'cartesian':
-            #             k2_min = subregion['k2_min']
-            #             k2_max = subregion['k2_max']
-            #             k3_min = subregion['k3_min']
-            #             k3_max = subregion['k3_max']
-            #         elif coordinate == 'child18':
-            #             delta_min = subregion['delta_min']
-            #             delta_max = subregion['delta_max']
-            #             theta_min = subregion['theta_min']
-            #             theta_max = subregion['theta_max']
-
-            #         if div_k1 !=0 and div_k2 !=0 and div_k3 !=0 and coordinate=='cartesian':
-            #             self.dk1 = dk1 = (k1_max-k1_min)/div_k1
-            #             self.dk2 = dk2 = (k2_max-k2_min)/div_k2
-            #             self.dk3 = dk3 = (k3_max-k3_min)/div_k3
-            #             self.dmu = 1.0
-            #             if method in ['naive']:
-            #                 self.k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
-            #                 self.k2_list = np.linspace(k2_min+dk2/2, k2_max-dk2/2, num=div_k2)
-            #                 self.k3_list = np.linspace(k3_min+dk3/2, k3_max-dk3/2, num=div_k3)
-            #             if method in ['simpson', 'trapezoidal']:
-            #                 self.k1_list = np.linspace(k1_min, k1_max, num=div_k1)
-            #                 self.k2_list = np.linspace(k2_min, k2_max, num=div_k2)
-            #                 self.k3_list = np.linspace(k3_min, k3_max, num=div_k3)
-            #             if method in ['monte_carlo']:
-            #                 self.k1_list = stats.uniform.rvs(loc=k1_min, scale=k1_max-k1_min, size=div_k1)
-            #                 self.k2_list = stats.uniform.rvs(loc=k2_min, scale=k2_max-k2_min, size=div_k2)
-            #                 self.k3_list = stats.uniform.rvs(loc=k3_min, scale=k3_max-k3_min, size=div_k3)
-
-            #             self.mu_list = np.array([0.0])
-            #             kkkmu_list = list(itertools.product(self.k1_list, self.k2_list, self.k3_list, self.mu_list))
-            #             if unique == True:
-            #                 kkkmu_list = [x for x in kkkmu_list if x[0]<x[1] and x[1]<x[2]]
-            #             self.kkkmu_list = kkkmu_list
-
-            #             #print(method)
-            #             fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=coordinate, method=method)
-                    
-            #         if div_k1 !=0 and div_delta !=0 and div_theta !=0 and coordinate=='child18':
-            #             self.dk1 = dk1 = (k1_max-k1_min)/div_k1
-            #             self.ddelta = ddelta = (delta_max-delta_min)/div_delta
-            #             self.dtheta = dtheta = (theta_max-theta_min)/div_theta
-            #             self.dmu = 1.0
-            #             if method in ['naive']:
-            #                 self.k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
-            #                 self.delta_list = np.linspace(delta_min+ddelta/2, delta_max-ddelta/2, num=div_delta)
-            #                 self.theta_list = np.linspace(theta_min+dtheta/2, theta_max-dtheta/2, num=div_theta)
-
-            #             # to be developed
-            #             if method in ['simpson', 'trapezoidal']:
-            #                 self.k1_list = np.linspace(k1_min, k1_max, num=div_k1)
-            #                 self.delta_list = np.linspace(delta_min, delta_max, num=div_delta)
-            #                 self.theta_list = np.linspace(theta_min, theta_max, num=div_theta)
-            #             #if method in ['monte_carlo']
-
-            #             self.mu_list = np.array([0.0])
-            #             kkkmu_list = list(itertools.product(self.k1_list, self.delta_list, self.theta_list, self.mu_list))
-            #             if unique == True:
-            #                 kkkmu_list = [x for x in kkkmu_list if k1_tf(*x[:3])<k2_tf(*x[:3]) and k2_tf(*x[:3])<k3_tf(*x[:3])]
-            #             self.kkkmu_list = kkkmu_list
-            #             fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=coordinate)
-            #         else:
-            #             pass
-            # else:
-            #     pass
-
-            #fisher_temp[1, 0] = fisher_temp[0, 1]
             fisher_bs_list[self.zmid_list==z] = fisher_temp
             print(z, fisher_temp)
         
@@ -706,3 +620,12 @@ class survey:
         self.alpha_stdev_bs = np.sqrt(fisher_bs_inv[0,0])
         self.beta_stdev_bs = np.sqrt(fisher_bs_inv[1,1])
         return self.fisher_bs
+
+
+        def add_prior(fisher):
+            fisher[0,0] += 1/self.alpha_prior['stdev']**2
+            fisher[1,1] += 1/self.beta_prior['stdev']**2
+            fisher_inv = np.linalg.inv(fisher)
+            alpha_stdev = np.sqrt(fisher_inv[0,0])
+            beta_stdev = np.sqrt(fisher_inv[1,1])
+            return fisher, alpha_stdev, beta_stdev
