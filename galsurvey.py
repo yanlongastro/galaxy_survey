@@ -50,6 +50,10 @@ def is_zero(x):
         return 1.0
 is_zero = np.vectorize(is_zero)
 
+def is_unique(k1, k2, k3):
+    return k1<=k2 and k2<=k3
+is_unique = np.vectorize(is_unique)
+
 def cost(k1, k2, k3):
     return (k3**2-k1**2-k2**2)/(2*k1*k2)
 
@@ -63,7 +67,6 @@ def sigma_angle(mu1, mu2, cos12):
     res = 1 - cos12**2 -mu1**2 - mu2**2 + 2*mu1*mu2*cos12
     res = 1/(2*np.pi* np.sqrt(res))
     return res
-
 
 def s123(k1, k2, k3):
     if k1==k2==k3:
@@ -147,6 +150,7 @@ class survey:
     todos:  - add a fiducial cosmology
             - add survey_type
             - try other integration methods: e.g., simps
+            - add FOG
     """
     def __init__(self, cosmo, ps, survey_geometrics, survey_parameters, ingredients, priors):
         self.cosmo = cosmo
@@ -422,7 +426,8 @@ class survey:
             k_1, k_2, k_3 = kargs
         elif coordinate =='child18':
             k_1, k_2, k_3 = k1_tf(*kargs), k2_tf(*kargs), k3_tf(*kargs)
-        mu1, mu2, mu3 = kargs
+
+        mu1, mu2, mu3 = muargs
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
 
         if np.abs(cos12)>1 or np.abs(cos23)>1 or np.abs(cos31)>1:
@@ -434,6 +439,8 @@ class survey:
         z1 = self.rsd_factor_z1(z, mu=mu1)
         z2 = self.rsd_factor_z1(z, mu=mu2)
         z3 = self.rsd_factor_z1(z, mu=mu3)
+
+        #print(z1, z2, z3, z12, z23, z31)
 
         p1 = self.power_spectrum(k_1, mu=mu1, z=z, nw=nw, linear=True)
         p2 = self.power_spectrum(k_2, mu=mu2, z=z, nw=nw, linear=True)
@@ -464,43 +471,45 @@ class survey:
         A2 = np.mean(A2sample)
         return np.sqrt(A2)
 
-    def integrand_bs(self, kmuargs, z, coordinate='cartesian', simplify=False, noise=True):
+    def integrand_bs(self, kmuargs, z, coordinate='cartesian', simplify=False, noise=True, unique=False):
         """
         """
+        integrand_db = np.zeros((2, 2))
         if coordinate == 'cartesian':
-            integrand_db = np.zeros((2, 2))
-            k1, k2, k3, mu1, mu2, mu3 = kmuargs
+            k1, k2, k3, mu1, mu2 = kmuargs
+            mu3 = - (k1*mu1+k2*mu2)/k3
             kargs = (k1, k2, k3)
             if beta(cost(*kargs)) == 0.0:
                 return np.zeros((2,2))
-            db = self.bispectrum_derivative(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
-            for i in range(2):
-                for j in range(2):
-                    integrand_db[i,j] = db[i]*db[j]
-            p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z, noise=noise), self.power_spectrum(k2, mu=mu2, z=z, noise=noise), self.power_spectrum(k3, mu=mu3, z=z, noise=noise)
-            integrand_cov = k1*k2*k3*beta(cost(*kargs))/s123(*kargs)/(p1*p2*p3)
-            integrand = integrand_db*integrand_cov
-            if 'RSD' in self.ingredients:
-                integrand *= sigma_angle(mu1, mu2, cost(*kargs))
-            return integrand
+            cos12 = mu2, cost(*kargs)
         elif coordinate == 'child18':
             integrand_db = np.zeros((2, 2))
-            k1, delta, theta, mu1, mu2, mu3 = kmuargs
-            k1, k2, k3 = k1_tf(k1, delta, theta), k2_tf(k1, delta, theta), k3_tf(k1, delta, theta), 
+            k1, delta, theta, mu1, mu2 = kmuargs
+            k1, k2, k3 = k1_tf(k1, delta, theta), k2_tf(k1, delta, theta), k3_tf(k1, delta, theta)
+            mu3 = -(k1*mu1+k2*mu2)/k3
             kargs = (k1, delta, theta)
-            db = self.bispectrum_derivative(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
-            for i in range(2):
-                for j in range(2):
-                    integrand_db[i,j] = db[i]*db[j]
-            p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z, noise=noise), self.power_spectrum(k2, mu=mu2, z=z, noise=noise), self.power_spectrum(k3, mu=mu3, z=z, noise=noise)
+            cos12 = np.cos(theta)
+
+        if unique==True and (not is_unique(k1, k2, k3)):
+            return np.zeros((2, 2))
+
+        db = self.bispectrum_derivative(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
+        for i in range(2):
+            for j in range(2):
+                integrand_db[i,j] = db[i]*db[j]
+        p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z, noise=noise), self.power_spectrum(k2, mu=mu2, z=z, noise=noise), self.power_spectrum(k3, mu=mu3, z=z, noise=noise)
+        
+        if coordinate == 'cartesian':
+            integrand_cov = k1*k2*k3*beta(cost(*kargs))/s123(*kargs)/(p1*p2*p3)
+        elif coordinate == 'child18':    
             integrand_cov = (k1*k2)**2*np.sin(theta) *beta(np.cos(theta))/s123(k1, k2, k3)/(p1*p2*p3)
-            integrand = integrand_db*integrand_cov
-            if 'RSD' in self.ingredients:
-                integrand *= sigma_angle(mu1, mu2, np.cos(theta))
-            return integrand
+        integrand = integrand_db*integrand_cov
+        if 'RSD' in self.ingredients:
+            integrand *= sigma_angle(mu1, mu2, cos12)
+        return integrand
             
 
-    def naive_integration_bs(self, args, coordinate='cartesian', method='naive'):
+    def naive_integration_bs(self, args, coordinate='cartesian', method='naive', unique=False):
         """
         todos:
             - use differrent methods of integration:
@@ -512,15 +521,14 @@ class survey:
         if method in ['naive', 'monte_carlo']:
             res = 0
             for kmuargs in self.kkkmu_list:
-                res += self.integrand_bs(kmuargs, *args, coordinate=coordinate)
+                res += self.integrand_bs(kmuargs, *args, coordinate=coordinate, unique=unique)
             return res*np.prod(self.dds)
         
         if method in ['simpson', 'trapezoidal']:
-            if coordinate == 'cartesian':
-                ints = np.zeros((len(self.kkkmu_list), 2, 2))
+            ints = np.zeros((len(self.kkkmu_list), 2, 2))
             for i in range(len(self.kkkmu_list)):
                 kmuargs = self.kkkmu_list[i]
-                ints[i] = self.integrand_bs(kmuargs, *args, coordinate=coordinate)
+                ints[i] = self.integrand_bs(kmuargs, *args, coordinate=coordinate, unique=unique)
             if method == 'simpson':
                 int_func = integrate.simps
             if method == 'trapezoidal':
@@ -529,12 +537,18 @@ class survey:
             ints = ints.reshape(*(self.divs), 2, 2)
             self.ints = ints
             ints = int_func(ints, self.k1_list, axis=0)
-            ints = int_func(ints, self.k2_list, axis=0)
-            ints = int_func(ints, self.k3_list, axis=0)
+            if coordinate == 'cartesian':
+                ints = int_func(ints, self.k2_list, axis=0)
+                ints = int_func(ints, self.k3_list, axis=0)
+            if coordinate == 'child18':
+                ints = int_func(ints, self.delta_list, axis=0)
+                ints = int_func(ints, self.theta_list, axis=0)
 
-            # check the following, if non-rsd
-            ints = int_func(ints, self.mu1_list, axis=0)
-            ints = int_func(ints, self.mu2_list, axis=0)
+            if 'RSD' in self.ingredients:
+                ints = int_func(ints, self.mu1_list, axis=0)
+                ints = int_func(ints, self.mu2_list, axis=0)
+            else:
+                ints = ints[0, 0]
             return ints
 
     def integrand_2d(self, args, k1_min=0.01, k1_max=0.2, div_k1=19, z=0, coordinate='child18'):
@@ -545,7 +559,7 @@ class survey:
         dk1 = (k1_max-k1_min)/div_k1
         k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
         for k1 in k1_list:
-            res += self.integrand_bs((k1, *args, 0., 0., 0., ), z=z, coordinate=coordinate)
+            res += self.integrand_bs((k1, *args, 0., 0.,), z=z, coordinate=coordinate)
         return res*dk1
 
     def fisher_matrix_bs(self, regions, method='naive', addprior=False, tol=1e-4, rtol=1e-4, divideby='num', divs=(20, 20, 20, 20, 20), dds=(0, 0, 0, 0, 0), unique=True):
@@ -575,11 +589,16 @@ class survey:
                 elif divideby == 'step':
                     self.dds = np.array(dds)
                     self.divs = np.round(np.diff(bounds).flatten()/np.array(dds))
+                
+                
                 if 'RSD' not in self.ingredients:
-                    self.divs[:-1] = 1
-                    self.divs[:-2] = 1
-                    self.dds[:-1] = 1.0
-                    self.dds[:-2] = 1.0
+                    bounds[-1] = [0, 0]
+                    bounds[-2] = [0, 0]
+                    self.divs[-1] = 1
+                    self.divs[-2] = 1
+                    self.dds[-1] = 1.0
+                    self.dds[-2] = 1.0
+                
                 if subregion['coordinate'] == 'cartesian':
                     keys = ['k1', 'k2', 'k3', 'mu1', 'mu2']
                 elif subregion['coordinate'] == 'child18':
@@ -588,28 +607,26 @@ class survey:
                 for key in keys:
                     i += 1
                     if method in ['naive']:
-                        temp_list = np.linspace((bounds[:,0]+self.dds/2)[i], (bounds[:,1]+self.dds/2)[i], num=self.divs[i])
+                        temp_list = np.linspace((bounds[:,0]+self.dds/2)[i], (bounds[:,1]-self.dds/2)[i], num=self.divs[i])
+                        if 'RSD' not in self.ingredients and i>2:
+                            temp_list = np.array([0.0])
                     if method in ['simpson', 'trapezoidal']:
-                        temp_list = np.linspace((bounds[:,0])[i], (bounds[:,1])[i], num=self.divs[i])
+                        temp_list = np.linspace(bounds[:,0][i], bounds[:,1][i], num=self.divs[i])
                     if method in ['monte_carlo']:
-                        temp_list = stats.uniform.rvs(loc=bounds[:,0])[i], scale=(bounds[:,1])[i]-(bounds[:,0])[i], size=self.divs[i])                    
+                        temp_list = stats.uniform.rvs(loc=bounds[:,0][i], scale=bounds[:,1][i]-bounds[:,0][i], size=self.divs[i])                    
                     setattr(self, key+'_list', temp_list)
 
                 if subregion['coordinate'] == 'cartesian':
                     kkkmu_list = list(itertools.product(self.k1_list, self.k2_list, self.k3_list, self.mu1_list, self.mu2_list))
-                    if unique == True:
-                        kkkmu_list = [x for x in kkkmu_list if x[0]<x[1] and x[1]<x[2]]
                     
                 if subregion['coordinate'] == 'child18':
                     kkkmu_list = list(itertools.product(self.k1_list, self.delta_list, self.theta_list, self.mu1_list, self.mu2_list))
-                    if unique == True:
-                        kkkmu_list = [x for x in kkkmu_list if k1_tf(*x[:3])<k2_tf(*x[:3]) and k2_tf(*x[:3])<k3_tf(*x[:3])]
 
                 self.kkkmu_list = kkkmu_list
-                fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=subregion['coordinate'], method=method)
+                fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=subregion['coordinate'], method=method, unique=unique)
 
             fisher_bs_list[self.zmid_list==z] = fisher_temp
-            print(z, fisher_temp)
+            print('%.3f'%z, fisher_temp.flatten())
         
         self.fisher_bs_list = np.array(fisher_bs_list)
         self.fisher_bs = np.sum(fisher_bs_list, axis=0)
@@ -622,10 +639,10 @@ class survey:
         return self.fisher_bs
 
 
-        def add_prior(fisher):
-            fisher[0,0] += 1/self.alpha_prior['stdev']**2
-            fisher[1,1] += 1/self.beta_prior['stdev']**2
-            fisher_inv = np.linalg.inv(fisher)
-            alpha_stdev = np.sqrt(fisher_inv[0,0])
-            beta_stdev = np.sqrt(fisher_inv[1,1])
-            return fisher, alpha_stdev, beta_stdev
+    def add_prior(fisher):
+        fisher[0,0] += 1/self.alpha_prior['stdev']**2
+        fisher[1,1] += 1/self.beta_prior['stdev']**2
+        fisher_inv = np.linalg.inv(fisher)
+        alpha_stdev = np.sqrt(fisher_inv[0,0])
+        beta_stdev = np.sqrt(fisher_inv[1,1])
+        return fisher, alpha_stdev, beta_stdev
