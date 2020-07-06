@@ -33,6 +33,16 @@ def k2_tf(k1, delta, theta):
 def k3_tf(k1, delta, theta):
     return np.sqrt(k1**2+(k1+delta)**2+2*k1*(k1+delta)*np.cos(theta))
 
+def k1_tf_as(k1, dleta1, delta2):
+    return k1
+
+def k2_tf_as(k1, dleta1, delta2):
+    return k1+delta1
+
+def k3_tf_as(k1, dleta1, delta2):
+    return k1+delta1+delta2
+
+
 def beta(x):
     if x==1 or x==-1:
         return .5
@@ -51,6 +61,9 @@ def is_zero(x):
 is_zero = np.vectorize(is_zero)
 
 def is_unique(k1, k2, k3):
+    """
+    This is actually a region function
+    """
     return k1<=k2 and k2<=k3
 is_unique = np.vectorize(is_unique)
 
@@ -263,7 +276,7 @@ class survey:
         return np.array([dpd_alpha, dpd_beta])
 
     @functools.lru_cache(maxsize=None)
-    def integrand_ps(self, k, mu, z, simplify=False):
+    def integrand_ps(self, k, mu, z, simplify=False, noise=True):
         """
         return a matrix
         """
@@ -289,7 +302,7 @@ class survey:
         for i in range(2):
             for j in range(2):
                 integrand_dp[i,j] = dp[i]*dp[j]
-        integrand_cov = 1/self.power_spectrum(k, mu, z, noise=True)**2
+        integrand_cov = 1/self.power_spectrum(k, mu, z, noise=noise)**2
         integrand = integrand_dp*integrand_cov* k**2
         return integrand
 
@@ -400,6 +413,8 @@ class survey:
             k_1, k_2, k_3 = kargs
         elif coordinate == 'child18':
             k_1, k_2, k_3 = k1_tf(*kargs), k2_tf(*kargs), k3_tf(*kargs)
+        elif coordinate == 'ascending':
+            k_1, k_2, k_3 = k1_tf_as(*kargs), k2_tf_as(*kargs), k3_tf_as(*kargs)
         mu1, mu2, mu3 = muargs
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
 
@@ -426,6 +441,8 @@ class survey:
             k_1, k_2, k_3 = kargs
         elif coordinate =='child18':
             k_1, k_2, k_3 = k1_tf(*kargs), k2_tf(*kargs), k3_tf(*kargs)
+        elif coordinate == 'ascending':
+            k_1, k_2, k_3 = k1_tf_as(*kargs), k2_tf_as(*kargs), k3_tf_as(*kargs)
 
         mu1, mu2, mu3 = muargs
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
@@ -457,8 +474,8 @@ class survey:
 
 
 
-    def R_bi(self, kargs, muargs=(0.,0.,0.), z=0):
-        return self.bispectrum(kargs, muargs=muargs, z=z, coordinate='child18')/self.bispectrum(kargs, muargs=muargs, z=z, coordinate='child18', nw=True)
+    def R_bi(self, kargs, muargs=(0.,0.,0.), z=0, coordinate='child18'):
+        return self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate)/self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate, nw=True)
 
     def A_bi(self, delta, theta, k1_min=0.01, k1_max=0.2, div_k1=10000, muargs=(0,0,0), z=0):
         k1sample = np.linspace(k1_min, k1_max, num=div_k1)
@@ -481,14 +498,22 @@ class survey:
             kargs = (k1, k2, k3)
             if beta(cost(*kargs)) == 0.0:
                 return np.zeros((2,2))
-            cos12 = mu2, cost(*kargs)
+            cos12 = cost(*kargs)
         elif coordinate == 'child18':
-            integrand_db = np.zeros((2, 2))
+            #integrand_db = np.zeros((2, 2))
             k1, delta, theta, mu1, mu2 = kmuargs
             k1, k2, k3 = k1_tf(k1, delta, theta), k2_tf(k1, delta, theta), k3_tf(k1, delta, theta)
             mu3 = -(k1*mu1+k2*mu2)/k3
             kargs = (k1, delta, theta)
             cos12 = np.cos(theta)
+        elif coordinate =='ascending':
+            k1, delta1, delta2, mu1, mu2 = kmuargs
+            k1, k2, k3 = k1_tf_as(k1, delta1, delta2), k2_tf_as(k1, delta1, delta2), k3_tf_as(k1, delta1, delta2)
+            mu3 = - (k1*mu1+k2*mu2)/k3
+            kargs = (k1, delta1, delta2)
+            if beta(cost(k1, k2, k3)) == 0.0:
+                return np.zeros((2,2))
+            cos12 = cost(k1, k2, k3)
 
         if unique==True and (not is_unique(k1, k2, k3)):
             return np.zeros((2, 2))
@@ -499,7 +524,7 @@ class survey:
                 integrand_db[i,j] = db[i]*db[j]
         p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z, noise=noise), self.power_spectrum(k2, mu=mu2, z=z, noise=noise), self.power_spectrum(k3, mu=mu3, z=z, noise=noise)
         
-        if coordinate == 'cartesian':
+        if coordinate == 'cartesian' or 'ascending':
             integrand_cov = k1*k2*k3*beta(cost(*kargs))/s123(*kargs)/(p1*p2*p3)
         elif coordinate == 'child18':    
             integrand_cov = (k1*k2)**2*np.sin(theta) *beta(np.cos(theta))/s123(k1, k2, k3)/(p1*p2*p3)
@@ -543,6 +568,9 @@ class survey:
             if coordinate == 'child18':
                 ints = int_func(ints, self.delta_list, axis=0)
                 ints = int_func(ints, self.theta_list, axis=0)
+            if coordinate == 'ascending':
+                ints = int_func(ints, self.delta1_list, axis=0)
+                ints = int_func(ints, self.delta2_list, axis=0)
 
             if 'RSD' in self.ingredients:
                 ints = int_func(ints, self.mu1_list, axis=0)
@@ -603,6 +631,8 @@ class survey:
                     keys = ['k1', 'k2', 'k3', 'mu1', 'mu2']
                 elif subregion['coordinate'] == 'child18':
                     keys = ['k1', 'delta', 'theta', 'mu1', 'mu2']
+                elif subregion['coordinate'] == 'ascending':
+                    keys = ['k1', 'delta1', 'delta2', 'mu1', 'mu2']
                 i = -1
                 for key in keys:
                     i += 1
@@ -621,6 +651,9 @@ class survey:
                     
                 if subregion['coordinate'] == 'child18':
                     kkkmu_list = list(itertools.product(self.k1_list, self.delta_list, self.theta_list, self.mu1_list, self.mu2_list))
+
+                if subregion['coordinate'] == 'ascending':
+                    kkkmu_list = list(itertools.product(self.k1_list, self.delta1_list, self.delta2_list, self.mu1_list, self.mu2_list))
 
                 self.kkkmu_list = kkkmu_list
                 fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=subregion['coordinate'], method=method, unique=unique)
