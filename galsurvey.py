@@ -33,13 +33,13 @@ def k2_tf(k1, delta, theta):
 def k3_tf(k1, delta, theta):
     return np.sqrt(k1**2+(k1+delta)**2+2*k1*(k1+delta)*np.cos(theta))
 
-def k1_tf_as(k1, dleta1, delta2):
+def k1_tf_as(k1, delta1, delta2):
     return k1
 
-def k2_tf_as(k1, dleta1, delta2):
+def k2_tf_as(k1, delta1, delta2):
     return k1+delta1
 
-def k3_tf_as(k1, dleta1, delta2):
+def k3_tf_as(k1, delta1, delta2):
     return k1+delta1+delta2
 
 
@@ -136,17 +136,17 @@ class ps_interpolation:
     Intepolates the power spectrum from data.
     ps, ps_nw: txt files
     """
-    def __init__(self, ps_file, ps_nw_file=None):
+    def __init__(self, ps_file, ps_nw_file=None, kind='linear'):
         pdata = np.loadtxt(ps_file)
         pnwdata = np.loadtxt(ps_nw_file)
         pdata_log = np.log10(pdata)
-        p_func_loglog = interpolate.interp1d(pdata_log[:,0], pdata_log[:,1], fill_value="extrapolate")
+        p_func_loglog = interpolate.interp1d(pdata_log[:,0], pdata_log[:,1], fill_value="extrapolate", kind=kind)
         self.matter_power_spectrum = lambda x: 10**(p_func_loglog(np.log10(x)))
         pnwdata_log = np.log10(pnwdata)
-        pnw_func_loglog = interpolate.interp1d(pnwdata_log[:,0], pnwdata_log[:,1], fill_value="extrapolate")
+        pnw_func_loglog = interpolate.interp1d(pnwdata_log[:,0], pnwdata_log[:,1], fill_value="extrapolate", kind=kind)
         self.matter_power_spectrum_no_wiggle = lambda x: 10**(pnw_func_loglog(np.log10(x)))
         oscdata = np.transpose([pdata[:,0], pdata[:,1]/pnwdata[:,1]-1])
-        osc = interpolate.interp1d(oscdata[:,0], oscdata[:,1], fill_value="extrapolate")
+        osc = interpolate.interp1d(oscdata[:,0], oscdata[:,1], fill_value="extrapolate", kind=kind)
         self.oscillation_part = osc
         #self.matter_power_spectrum = lambda x: self.matter_power_spectrum_no_wiggle(x)*(1+osc(x))
 
@@ -243,6 +243,12 @@ class survey:
             return 1.0
         rsd = self.galactic_bias(z) + self.cosmo.linear_growth_rate(z)*mu**2
         return rsd
+
+    def fog_factor(self, k, mu=0.0):
+        if 'FOG' not in self.ingredients:
+            return 1.0
+        fog = np.exp(-(k*mu*self.sigma_p)**2/2.)
+        return fog
 
     def oscillation_part(self, k, mu=0.0, z=0.0, damp=True, priors=True):
         if priors == True:
@@ -524,7 +530,7 @@ class survey:
                 integrand_db[i,j] = db[i]*db[j]
         p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z, noise=noise), self.power_spectrum(k2, mu=mu2, z=z, noise=noise), self.power_spectrum(k3, mu=mu3, z=z, noise=noise)
         
-        if coordinate == 'cartesian' or 'ascending':
+        if coordinate in ['cartesian', 'ascending']:
             integrand_cov = k1*k2*k3*beta(cost(*kargs))/s123(*kargs)/(p1*p2*p3)
         elif coordinate == 'child18':    
             integrand_cov = (k1*k2)**2*np.sin(theta) *beta(np.cos(theta))/s123(k1, k2, k3)/(p1*p2*p3)
