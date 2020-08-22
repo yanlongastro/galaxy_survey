@@ -24,23 +24,21 @@ import time
 def f_phase(k): 
     return 0.227*k**0.872/(k**0.872+0.0324**0.872)
 
-def k1_tf(k1, delta, theta):
-    return k1
+def k_tf(k1, delta, theta):
+    return k1, k1+delta, np.sqrt(k1**2+(k1+delta)**2+2*k1*(k1+delta)*np.cos(theta))
 
-def k2_tf(k1, delta, theta):
-    return k1+delta
+def k_tf_as(k1, delta1, delta2):
+    return k1, k1+delta1, k1+delta1+delta2
 
-def k3_tf(k1, delta, theta):
-    return np.sqrt(k1**2+(k1+delta)**2+2*k1*(k1+delta)*np.cos(theta))
 
-def k1_tf_as(k1, delta1, delta2):
-    return k1
-
-def k2_tf_as(k1, delta1, delta2):
-    return k1+delta1
-
-def k3_tf_as(k1, delta1, delta2):
-    return k1+delta1+delta2
+def mu_tf(mu_r, xi, cos12):
+    mu1_t = mu_r*np.cos(xi)
+    mu2_t = mu_r*np.sin(xi)
+    mu1_t *= np.sqrt(2*(1-cos12))
+    mu2_t *= np.sqrt(2*(1+cos12))
+    mu1 = (mu1_t+mu2_t)/2
+    mu2 = (-mu1_t+mu2_t)/2
+    return mu1, mu2
 
 
 def beta(x):
@@ -78,8 +76,12 @@ def g_kernal(k1, k2, cos12):
 
 def sigma_angle(mu1, mu2, cos12):
     res = 1 - cos12**2 -mu1**2 - mu2**2 + 2*mu1*mu2*cos12
+    if res <=0:
+        return 0.0
     res = 1/(2*np.pi* np.sqrt(res))
     return res
+
+sigma_angle = np.vectorize(sigma_angle)
 
 def s123(k1, k2, k3):
     if k1==k2==k3:
@@ -418,9 +420,9 @@ class survey:
         if coordinate == 'cartesian':
             k_1, k_2, k_3 = kargs
         elif coordinate == 'child18':
-            k_1, k_2, k_3 = k1_tf(*kargs), k2_tf(*kargs), k3_tf(*kargs)
+            k_1, k_2, k_3 = k_tf(*kargs)
         elif coordinate == 'ascending':
-            k_1, k_2, k_3 = k1_tf_as(*kargs), k2_tf_as(*kargs), k3_tf_as(*kargs)
+            k_1, k_2, k_3 = k_tf_as(*kargs)
         mu1, mu2, mu3 = muargs
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
 
@@ -446,9 +448,9 @@ class survey:
         if coordinate =='cartesian':
             k_1, k_2, k_3 = kargs
         elif coordinate =='child18':
-            k_1, k_2, k_3 = k1_tf(*kargs), k2_tf(*kargs), k3_tf(*kargs)
+            k_1, k_2, k_3 = k_tf(*kargs)
         elif coordinate == 'ascending':
-            k_1, k_2, k_3 = k1_tf_as(*kargs), k2_tf_as(*kargs), k3_tf_as(*kargs)
+            k_1, k_2, k_3 = k_tf_as(*kargs)
 
         mu1, mu2, mu3 = muargs
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
@@ -494,7 +496,8 @@ class survey:
         A2 = np.mean(A2sample)
         return np.sqrt(A2)
 
-    def integrand_bs(self, kmuargs, z, coordinate='cartesian', simplify=False, noise=True, unique=False):
+    #@functools.lru_cache(maxsize=None)
+    def integrand_bs(self, kmuargs, z, coordinate='cartesian', simplify=False, noise=True, unique=False, mu_opt=False):
         """
         """
         integrand_db = np.zeros((2, 2))
@@ -508,20 +511,30 @@ class survey:
         elif coordinate == 'child18':
             #integrand_db = np.zeros((2, 2))
             k1, delta, theta, mu1, mu2 = kmuargs
-            k1, k2, k3 = k1_tf(k1, delta, theta), k2_tf(k1, delta, theta), k3_tf(k1, delta, theta)
+            k1, k2, k3 = k_tf(k1, delta, theta)
             mu3 = -(k1*mu1+k2*mu2)/k3
             kargs = (k1, delta, theta)
             cos12 = np.cos(theta)
         elif coordinate =='ascending':
             k1, delta1, delta2, mu1, mu2 = kmuargs
-            k1, k2, k3 = k1_tf_as(k1, delta1, delta2), k2_tf_as(k1, delta1, delta2), k3_tf_as(k1, delta1, delta2)
+            k1, k2, k3 = k_tf_as(k1, delta1, delta2)
             mu3 = - (k1*mu1+k2*mu2)/k3
             kargs = (k1, delta1, delta2)
             if beta(cost(k1, k2, k3)) == 0.0:
                 return np.zeros((2,2))
             cos12 = cost(k1, k2, k3)
 
+        if mu_opt == True:
+            mu_s = mu1
+            mu_r = np.sqrt(1.-mu_s**2)
+            #mu_r = mu1
+            xi = mu2
+            mu1, mu2 = mu_tf(mu_r, xi, cos12)
+            #print(mu1, mu2, mu_r, xi, cos12)
+
         if unique==True and (not is_unique(k1, k2, k3)):
+            return np.zeros((2, 2))
+        if 'RSD' in self.ingredients and (sigma_angle(mu1, mu2, cos12) == 0.):
             return np.zeros((2, 2))
 
         db = self.bispectrum_derivative(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
@@ -536,11 +549,17 @@ class survey:
             integrand_cov = (k1*k2)**2*np.sin(theta) *beta(np.cos(theta))/s123(k1, k2, k3)/(p1*p2*p3)
         integrand = integrand_db*integrand_cov
         if 'RSD' in self.ingredients:
-            integrand *= sigma_angle(mu1, mu2, cos12)
+            if mu_opt == False:
+                integrand *= sigma_angle(mu1, mu2, cos12)
+                #integrand = sigma_angle(mu1, mu2, cos12)
+            else:
+                #integrand *= sigma_angle(mu1, mu2, cos12) * (1-cos12**2)**1. * mu_r
+                integrand *= 1/(2*np.pi)
         return integrand
             
 
-    def naive_integration_bs(self, args, coordinate='cartesian', method='naive', unique=False):
+    #@functools.lru_cache(maxsize=None)
+    def naive_integration_bs(self, args, coordinate='cartesian', method='naive', unique=False, mu_opt=False):
         """
         todos:
             - use differrent methods of integration:
@@ -552,14 +571,15 @@ class survey:
         if method in ['naive', 'monte_carlo']:
             res = 0
             for kmuargs in self.kkkmu_list:
-                res += self.integrand_bs(kmuargs, *args, coordinate=coordinate, unique=unique)
+                res += self.integrand_bs(kmuargs, *args, coordinate=coordinate, unique=unique, mu_opt=mu_opt)
+            #print(self.dds)
             return res*np.prod(self.dds)
         
         if method in ['simpson', 'trapezoidal']:
             ints = np.zeros((len(self.kkkmu_list), 2, 2))
             for i in range(len(self.kkkmu_list)):
                 kmuargs = self.kkkmu_list[i]
-                ints[i] = self.integrand_bs(kmuargs, *args, coordinate=coordinate, unique=unique)
+                ints[i] = self.integrand_bs(kmuargs, *args, coordinate=coordinate, unique=unique, mu_opt=mu_opt)
             if method == 'simpson':
                 int_func = integrate.simps
             if method == 'trapezoidal':
@@ -596,7 +616,7 @@ class survey:
             res += self.integrand_bs((k1, *args, 0., 0.,), z=z, coordinate=coordinate)
         return res*dk1
 
-    def fisher_matrix_bs(self, regions, method='naive', addprior=False, tol=1e-4, rtol=1e-4, divideby='num', divs=(20, 20, 20, 20, 20), dds=(0, 0, 0, 0, 0), unique=True):
+    def fisher_matrix_bs(self, regions, method='naive', addprior=False, tol=1e-4, rtol=1e-4, divideby='num', divs=(20, 20, 20, 20, 20), dds=(0, 0, 0, 0, 0), unique=True, verbose=False):
         """
         todos:  - test this method
                 - the upper bound of k1 is probably too small
@@ -662,10 +682,11 @@ class survey:
                     kkkmu_list = list(itertools.product(self.k1_list, self.delta1_list, self.delta2_list, self.mu1_list, self.mu2_list))
 
                 self.kkkmu_list = kkkmu_list
-                fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=subregion['coordinate'], method=method, unique=unique)
+                fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=subregion['coordinate'], method=method, unique=unique, mu_opt=subregion['mu_opt'])
 
             fisher_bs_list[self.zmid_list==z] = fisher_temp
-            print('%.3f'%z, fisher_temp.flatten())
+            if verbose is True:
+                print('%.3f'%z, fisher_temp.flatten())
         
         self.fisher_bs_list = np.array(fisher_bs_list)
         self.fisher_bs = np.sum(fisher_bs_list, axis=0)
