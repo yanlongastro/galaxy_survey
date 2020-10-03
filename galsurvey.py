@@ -76,7 +76,7 @@ def g_kernal(k1, k2, cos12):
 
 def sigma_angle(mu1, mu2, cos12):
     res = 1 - cos12**2 -mu1**2 - mu2**2 + 2*mu1*mu2*cos12
-    if res <=0:
+    if res <= 0.:
         return 0.0
     res = 1/(2*np.pi* np.sqrt(res))
     return res
@@ -178,6 +178,8 @@ class survey:
         self.ingredients = ingredients
         for key in priors:
             setattr(self, key, priors[key])
+
+        self.evaluation_count = 0
 
     #def get_ready(self):
         if hasattr(self, 'ng_z_list'):
@@ -501,40 +503,42 @@ class survey:
         """
         """
         integrand_db = np.zeros((2, 2))
+
+        k1_var, k2_var, k3_var, mu1_var, mu2_var = kmuargs
+        kargs = (k1_var, k2_var, k3_var)
+
         if coordinate == 'cartesian':
-            k1, k2, k3, mu1, mu2 = kmuargs
-            mu3 = - (k1*mu1+k2*mu2)/k3
-            kargs = (k1, k2, k3)
+            k1, k2, k3 = kargs
             if beta(cost(*kargs)) == 0.0:
                 return np.zeros((2,2))
             cos12 = cost(*kargs)
         elif coordinate == 'child18':
-            #integrand_db = np.zeros((2, 2))
-            k1, delta, theta, mu1, mu2 = kmuargs
-            k1, k2, k3 = k_tf(k1, delta, theta)
-            mu3 = -(k1*mu1+k2*mu2)/k3
-            kargs = (k1, delta, theta)
-            cos12 = np.cos(theta)
+            k1, k2, k3 = k_tf(*kargs)
+            cos12 = np.cos(k3_var)
         elif coordinate =='ascending':
-            k1, delta1, delta2, mu1, mu2 = kmuargs
-            k1, k2, k3 = k_tf_as(k1, delta1, delta2)
-            mu3 = - (k1*mu1+k2*mu2)/k3
-            kargs = (k1, delta1, delta2)
+            k1, k2, k3 = k_tf_as(*kargs)
             if beta(cost(k1, k2, k3)) == 0.0:
                 return np.zeros((2,2))
             cos12 = cost(k1, k2, k3)
 
         if mu_opt == True:
-            mu_s = mu1
+            mu_s = mu1_var
             mu_r = np.sqrt(1.-mu_s**2)
-            #mu_r = mu1
-            xi = mu2
+            #mu_r = mu1_var
+            xi = mu2_var
             mu1, mu2 = mu_tf(mu_r, xi, cos12)
-            #print(mu1, mu2, mu_r, xi, cos12)
+        else:
+            mu1, mu2 = mu1_var, mu2_var
+
+        mu3 = - (k1*mu1+k2*mu2)/k3
 
         if unique==True and (not is_unique(k1, k2, k3)):
             return np.zeros((2, 2))
-        if 'RSD' in self.ingredients and (sigma_angle(mu1, mu2, cos12) == 0.):
+        angular_factor = sigma_angle(mu1, mu2, cos12)
+        if 'RSD' in self.ingredients and (angular_factor == 0.) and (not mu_opt):
+            #print(1 - cos12**2 -mu1**2 - mu2**2 + 2*mu1*mu2*cos12)
+            return np.zeros((2, 2))
+        if k1>self.k_max_bi or k2>self.k_max_bi or k3>self.k_max_bi:
             return np.zeros((2, 2))
 
         db = self.bispectrum_derivative(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
@@ -544,17 +548,18 @@ class survey:
         p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z, noise=noise), self.power_spectrum(k2, mu=mu2, z=z, noise=noise), self.power_spectrum(k3, mu=mu3, z=z, noise=noise)
         
         if coordinate in ['cartesian', 'ascending']:
-            integrand_cov = k1*k2*k3*beta(cost(*kargs))/s123(*kargs)/(p1*p2*p3)
+            integrand_cov = k1*k2*k3*beta(cos12)/s123(k1, k2, k3)/(p1*p2*p3)
         elif coordinate == 'child18':    
-            integrand_cov = (k1*k2)**2*np.sin(theta) *beta(np.cos(theta))/s123(k1, k2, k3)/(p1*p2*p3)
+            integrand_cov = (k1*k2)**2*np.sin(k3_var) *beta(cos12)/s123(k1, k2, k3)/(p1*p2*p3)
         integrand = integrand_db*integrand_cov
         if 'RSD' in self.ingredients:
             if mu_opt == False:
-                integrand *= sigma_angle(mu1, mu2, cos12)
+                integrand *= angular_factor
                 #integrand = sigma_angle(mu1, mu2, cos12)
             else:
                 #integrand *= sigma_angle(mu1, mu2, cos12) * (1-cos12**2)**1. * mu_r
                 integrand *= 1/(2*np.pi)
+        self.evaluation_count += 1
         return integrand
             
 
@@ -616,7 +621,7 @@ class survey:
             res += self.integrand_bs((k1, *args, 0., 0.,), z=z, coordinate=coordinate)
         return res*dk1
 
-    def fisher_matrix_bs(self, regions, method='naive', addprior=False, tol=1e-4, rtol=1e-4, divideby='num', divs=(20, 20, 20, 20, 20), dds=(0, 0, 0, 0, 0), unique=True, verbose=False):
+    def fisher_matrix_bs(self, regions, method='naive', addprior=False, tol=1e-4, rtol=1e-4, unique=True, verbose=False, k_max_bi=2333):
         """
         todos:  - test this method
                 - the upper bound of k1 is probably too small
@@ -627,6 +632,10 @@ class survey:
         divideby: num, step
         """
         fisher_bs_list = np.zeros((len(self.zmid_list), 2, 2))
+
+        self.evaluation_count = 0
+        self.sampling_count = 0
+        self.k_max_bi = k_max_bi
         
         for z in self.zmid_list:
             fisher_temp = np.zeros((2,2))
@@ -637,12 +646,14 @@ class survey:
 
             for subregion in regions:
                 bounds = np.array(subregion['bounds'])
-                if divideby == 'num':
-                    self.dds = np.diff(bounds).flatten()/np.array(divs)
-                    self.divs = np.array(divs)
-                elif divideby == 'step':
-                    self.dds = np.array(dds)
-                    self.divs = np.round(np.diff(bounds).flatten()/np.array(dds))
+                if subregion['divideby'] == 'num':
+                    self.divs = np.array(subregion['divs'])
+                    self.dds = np.diff(bounds).flatten()/np.array(self.divs)
+                    
+                elif subregion['divideby'] == 'step':
+                    self.dds = np.array(subregion['dds'])
+                    self.divs = np.round(np.diff(bounds).flatten()/np.array(self.dds))
+                    self.divs = (self.divs).astype(int)
                 
                 
                 if 'RSD' not in self.ingredients:
@@ -682,7 +693,8 @@ class survey:
                     kkkmu_list = list(itertools.product(self.k1_list, self.delta1_list, self.delta2_list, self.mu1_list, self.mu2_list))
 
                 self.kkkmu_list = kkkmu_list
-                fisher_temp += v/(np.pi)*self.naive_integration_bs(args=(z,), coordinate=subregion['coordinate'], method=method, unique=unique, mu_opt=subregion['mu_opt'])
+                fisher_temp += v/(8*np.pi**4)*self.naive_integration_bs(args=(z,), coordinate=subregion['coordinate'], method=method, unique=unique, mu_opt=subregion['mu_opt'])
+                self.sampling_count += np.prod(self.divs)
 
             fisher_bs_list[self.zmid_list==z] = fisher_temp
             if verbose is True:
@@ -699,10 +711,12 @@ class survey:
         return self.fisher_bs
 
 
-    def add_prior(fisher):
+    def add_prior(self, fisher):
         fisher[0,0] += 1/self.alpha_prior['stdev']**2
         fisher[1,1] += 1/self.beta_prior['stdev']**2
         fisher_inv = np.linalg.inv(fisher)
         alpha_stdev = np.sqrt(fisher_inv[0,0])
         beta_stdev = np.sqrt(fisher_inv[1,1])
         return fisher, alpha_stdev, beta_stdev
+
+
