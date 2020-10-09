@@ -20,6 +20,7 @@ import itertools
 import pathos.pools as pp
 from multiprocessing import cpu_count, Pool
 import time
+import sobol_seq
 
 
 cimport cython
@@ -116,9 +117,7 @@ def s123(double k1, double k2, double k3):
 #    return res
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def two_value_interpolation_c(np.ndarray[np.float64_t, ndim=1, negative_indices=False] x, 
-                                        np.ndarray[np.float64_t, ndim=1, negative_indices=False] y, 
-                                        np.float64_t val, np.int64_t n):
+def two_value_interpolation_c(np.ndarray[np.float64_t] x, np.ndarray[np.float64_t] y, np.float64_t val, np.int64_t n):
     cdef unsigned int index, index_max, index_min, index_mid
     cdef long double _xrange, xdiff, modolo, ydiff
     cdef long double y_interp
@@ -664,17 +663,16 @@ class survey:
         cdef double [:,:,:] ints_view = ints
 
         #t0 = time.time()
-        k_max_bi = self.k_max_bi
 
         for i in range(len_kmu):
-            arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate, unique, mu_opt, k_max_bi)
+            arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, unique=unique, mu_opt=mu_opt, k_max_bi=self.k_max_bi)
             for j in range(2):
                 for k in range(2):
                     ints_view[i,j,k] = arr[j,k]
         
         #print(time.time()-t0)
 
-        if method in ['naive', 'monte_carlo']:
+        if method in ['naive', 'monte_carlo', 'sobol']:
             return np.sum(ints, axis=0)*np.prod(self.dds)
         
         if method in ['simpson', 'trapezoidal']:
@@ -687,15 +685,9 @@ class survey:
             #print(ints)
             #self.ints = ints
             ints = int_func(ints, self.k1_list, axis=0)
-            if coordinate == 'cartesian':
-                ints = int_func(ints, self.k2_list, axis=0)
-                ints = int_func(ints, self.k3_list, axis=0)
-            if coordinate == 'child18':
-                ints = int_func(ints, self.delta_list, axis=0)
-                ints = int_func(ints, self.theta_list, axis=0)
-            if coordinate == 'ascending':
-                ints = int_func(ints, self.delta1_list, axis=0)
-                ints = int_func(ints, self.delta2_list, axis=0)
+            ints = int_func(ints, self.k2_list, axis=0)
+            ints = int_func(ints, self.k3_list, axis=0)
+
 
             if 'RSD' in self.ingredients:
                 ints = int_func(ints, self.mu1_list, axis=0)
@@ -754,40 +746,47 @@ class survey:
                 
                 
                 if 'RSD' not in self.ingredients:
-                    bounds[-1] = [0, 0]
-                    bounds[-2] = [0, 0]
+                    bounds[-1] = [0., 0.]
+                    bounds[-2] = [0., 0.]
                     self.divs[-1] = 1
                     self.divs[-2] = 1
                     self.dds[-1] = 1.0
                     self.dds[-2] = 1.0
                 
-                if subregion['coordinate'] == 'cartesian':
-                    keys = ['k1', 'k2', 'k3', 'mu1', 'mu2']
-                elif subregion['coordinate'] == 'child18':
-                    keys = ['k1', 'delta', 'theta', 'mu1', 'mu2']
-                elif subregion['coordinate'] == 'ascending':
-                    keys = ['k1', 'delta1', 'delta2', 'mu1', 'mu2']
-                i = -1
-                for key in keys:
-                    i += 1
-                    if method in ['naive']:
-                        temp_list = np.linspace((bounds[:,0]+self.dds/2)[i], (bounds[:,1]-self.dds/2)[i], num=self.divs[i])
-                        if 'RSD' not in self.ingredients and i>2:
-                            temp_list = np.array([0.0])
-                    if method in ['simpson', 'trapezoidal']:
-                        temp_list = np.linspace(bounds[:,0][i], bounds[:,1][i], num=self.divs[i])
-                    if method in ['monte_carlo']:
-                        temp_list = stats.uniform.rvs(loc=bounds[:,0][i], scale=bounds[:,1][i]-bounds[:,0][i], size=self.divs[i])                    
-                    setattr(self, key+'_list', temp_list)
 
-                if subregion['coordinate'] == 'cartesian':
+                keys = ['k1', 'k2', 'k3', 'mu1', 'mu2']
+
+                if method in ['naive', 'simpson', 'trapezoidal', 'monte_carlo']:
+                    i = -1
+                    for key in keys:
+                        i += 1
+                        if method in ['naive']:
+                            temp_list = np.linspace((bounds[:,0]+self.dds/2)[i], (bounds[:,1]-self.dds/2)[i], num=self.divs[i])
+                            if 'RSD' not in self.ingredients and i>2:
+                                temp_list = np.array([0.0])
+                        if method in ['simpson', 'trapezoidal']:
+                            temp_list = np.linspace(bounds[:,0][i], bounds[:,1][i], num=self.divs[i])
+                        if method in ['monte_carlo']:
+                            temp_list = stats.uniform.rvs(loc=bounds[:,0][i], scale=bounds[:,1][i]-bounds[:,0][i], size=self.divs[i])    
+                        
+                        if i<3 and self.divs[i]==1:
+                            temp_list = np.array([bounds[:,0][i]/2 + bounds[:,1][i]/2])
+                        
+                        setattr(self, key+'_list', temp_list)
+
                     kkkmu_list = list(itertools.product(self.k1_list, self.k2_list, self.k3_list, self.mu1_list, self.mu2_list))
                     
-                if subregion['coordinate'] == 'child18':
-                    kkkmu_list = list(itertools.product(self.k1_list, self.delta_list, self.theta_list, self.mu1_list, self.mu2_list))
+                    
+                if method == 'sobol':
+                    nd_list = sobol_seq.i4_sobol_generate(len(keys), np.prod(self.divs))
+                    for i in range(len(keys)):
+                        temp_list = nd_list[:,i]*(bounds[i,1]-bounds[i,0])+bounds[i,0]
 
-                if subregion['coordinate'] == 'ascending':
-                    kkkmu_list = list(itertools.product(self.k1_list, self.delta1_list, self.delta2_list, self.mu1_list, self.mu2_list))
+                        if i<3 and self.divs[i]==1:
+                            temp_list = np.repeat(bounds[:,0][i]/2 + bounds[:,1][i]/2, len(nd_list))
+
+                        setattr(self, keys[i]+'_list', temp_list)
+                    kkkmu_list = list(zip(self.k1_list, self.k2_list, self.k3_list, self.mu1_list, self.mu2_list))
 
                 self.kkkmu_list = kkkmu_list
                 fisher_temp += v/(8*pi**4)*self.naive_integration_bs(args=(z,), coordinate=subregion['coordinate'], method=method, unique=unique, mu_opt=subregion['mu_opt'])
@@ -799,12 +798,12 @@ class survey:
         
         self.fisher_bs_list = np.array(fisher_bs_list)
         self.fisher_bs = np.sum(fisher_bs_list, axis=0)
-        if addprior == True:
-            self.fisher_bs[0,0] += 1/self.alpha_prior['stdev']**2
-            self.fisher_bs[1,1] += 1/self.beta_prior['stdev']**2
-        fisher_bs_inv = np.linalg.inv(self.fisher_bs)
-        self.alpha_stdev_bs = sqrt(fisher_bs_inv[0,0])
-        self.beta_stdev_bs = sqrt(fisher_bs_inv[1,1])
+        # if addprior == True:
+        #     self.fisher_bs[0,0] += 1/self.alpha_prior['stdev']**2
+        #     self.fisher_bs[1,1] += 1/self.beta_prior['stdev']**2
+        # fisher_bs_inv = np.linalg.inv(self.fisher_bs)
+        # self.alpha_stdev_bs = sqrt(fisher_bs_inv[0,0])
+        # self.beta_stdev_bs = sqrt(fisher_bs_inv[1,1])
         return self.fisher_bs
 
 
