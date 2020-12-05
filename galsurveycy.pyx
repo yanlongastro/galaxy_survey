@@ -51,9 +51,9 @@ def mu_tf(double mu_r, double xi, double cos12):
 
 
 def beta(double x):
-    if x==1 or x==-1:
+    if x==1. or x==-1.:
         return .5
-    elif -1<x<1:
+    elif -1.<x<1.:
         return 1
     else:
         return 0
@@ -67,7 +67,7 @@ def is_zero(x):
         return 1.0
 #is_zero = np.vectorize(is_zero)
 
-def is_unique(k1, k2, k3):
+def is_unique(double k1, double k2, double k3):
     """
     This is actually a region function
     """
@@ -579,12 +579,15 @@ class survey:
         return sqrt(A2)
 
     #@functools.lru_cache(maxsize=None)
-    def integrand_bs(self, (double, double, double, double, double) kmuargs, double z, coordinate='cartesian', simplify=False, noise=True, unique=False, mu_opt=False, k_max_bi=2333):
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    def integrand_bs(self, (double, double, double, double, double) kmuargs, double z, coordinate='cartesian', simplify=False, noise=True, unique=False, mu_opt=False, double k_max_bi=2333):
         """
         """
         integrand_db = np.zeros((2, 2))
         cdef double k1_var, k2_var, k3_var, mu1_var, mu2_var
         cdef double k1, k2, k3, mu1, mu2
+        cdef unsigned int i, j
 
         k1_var, k2_var, k3_var, mu1_var, mu2_var = kmuargs
         cdef (double, double, double) kargs = (k1_var, k2_var, k3_var)
@@ -648,7 +651,7 @@ class survey:
     #@functools.lru_cache(maxsize=None)
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    def naive_integration_bs(self, args, coordinate='cartesian', method='naive', unique=False, mu_opt=False):
+    def naive_integration_bs(self, args, coordinate='cartesian', method='sobol', unique=False, mu_opt=False):
         """
         todos:
             - use differrent methods of integration:
@@ -657,10 +660,11 @@ class survey:
                 -monte carlo
         """
         #print(method)
-        len_kmu = len(self.kkkmu_list)
+        cdef unsigned int len_kmu = len(self.kkkmu_list)
         ints = np.zeros((len_kmu, 2, 2))
         #cdef double [:,:,:] res_view = res
         cdef double [:,:,:] ints_view = ints
+        cdef unsigned int i, j, k
 
         #t0 = time.time()
 
@@ -707,7 +711,7 @@ class survey:
             res += self.integrand_bs((k1, *args, 0., 0.,), z=z, coordinate=coordinate)
         return res*dk1
 
-    def fisher_matrix_bs(self, regions, method='naive', addprior=False, tol=1e-4, rtol=1e-4, unique=True, verbose=False, k_max_bi=2333):
+    def fisher_matrix_bs(self, regions, method='sobol', addprior=False, tol=1e-4, rtol=1e-4, unique=True, verbose=False, k_max_bi=2333.):
         """
         todos:  - test this method
                 - the upper bound of k1 is probably too small
