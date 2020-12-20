@@ -260,6 +260,7 @@ class survey:
         self.cosmo = cosmo
         self.pisf = pi/self.cosmo.s_f
         self.ps = ps
+        self.additional_parameters = ps.additional_parameters
         for key in survey_geometrics:
             setattr(self, key, survey_geometrics[key])
         for key in survey_parameters:
@@ -269,6 +270,7 @@ class survey:
             setattr(self, key, priors[key])
 
         self.evaluation_count = 0
+        self.db_shape = (2+len(self.additional_parameters)+3, 2+len(self.additional_parameters)+3)
 
     #def get_ready(self):
         if hasattr(self, 'ng_z_list'):
@@ -393,6 +395,15 @@ class survey:
         dpd_alpha = dpdk*(-k/pow(self.alpha_prior['mean'], 2))
         dpd_beta = dpdk*(f_phase(k)/self.cosmo.s_f)
         return np.array([dpd_alpha, dpd_beta])
+
+
+    def power_spectrum_derivative_additional(self, double k, mu=0.0, z=0.0, linear=False):
+        dpdp = np.array([f(k) for f in self.ps.matter_power_spectrum_derivative_additional])
+        if linear==False:
+            dpdp *= pow(self.rsd_factor_z1(z, mu), 2)
+        dpdp *= pow(self.cosmo.linear_growth_factor(z)/self.cosmo.D0, 2)
+        return dpdp
+
 
     @functools.lru_cache(maxsize=None)
     def integrand_ps(self, k, mu, z, simplify=False, noise=True):
@@ -626,7 +637,42 @@ class survey:
 
 
     def bispectrum_derivative_additional(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian', nw=False, noise=False):
-        2333
+        cdef double k_1, k_2, k_3, mu_1, mu_2, mu_3
+
+        if coordinate =='cartesian':
+            k_1, k_2, k_3 = kargs
+        elif coordinate =='child18':
+            k_1, k_2, k_3 = k_tf(*kargs)
+        elif coordinate == 'ascending':
+            k_1, k_2, k_3 = k_tf_as(*kargs)
+
+        mu1, mu2, mu3 = muargs
+        cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
+
+        if abs(cos12)>1 or abs(cos23)>1 or abs(cos31)>1:
+            return np.array([0.0, 0.0])
+        
+        z12 = self.rsd_factor_z2(k_1, k_2, cos12, mu1=mu1, mu2=mu2, z=z)
+        z23 = self.rsd_factor_z2(k_2, k_3, cos23, mu1=mu2, mu2=mu3, z=z)
+        z31 = self.rsd_factor_z2(k_3, k_1, cos31, mu1=mu3, mu2=mu1, z=z)
+        z1 = self.rsd_factor_z1(z, mu=mu1)
+        z2 = self.rsd_factor_z1(z, mu=mu2)
+        z3 = self.rsd_factor_z1(z, mu=mu3)
+
+        #print(z1, z2, z3, z12, z23, z31)
+
+        p1 = self.power_spectrum(k_1, mu=mu1, z=z, nw=nw, linear=True)
+        p2 = self.power_spectrum(k_2, mu=mu2, z=z, nw=nw, linear=True)
+        p3 = self.power_spectrum(k_3, mu=mu3, z=z, nw=nw, linear=True)
+
+        dp1 = self.power_spectrum_derivative_additional(k_1, mu=mu1, z=z, linear=True)
+        dp2 = self.power_spectrum_derivative_additional(k_2, mu=mu2, z=z, linear=True)
+        dp3 = self.power_spectrum_derivative_additional(k_3, mu=mu3, z=z, linear=True)
+        
+        res = 2*((dp1*p2+p1*dp2)*z12*z1*z2 +(dp2*p3+p2*dp3)*z23*z2*z3 +(dp3*p1+p3*dp1)*z31*z3*z1)
+        if noise==True:
+            res += (dp1+dp2+dp3)/self.ng(z)
+        return res
 
 
 
@@ -650,8 +696,7 @@ class survey:
     def integrand_bs(self, (double, double, double, double, double) kmuargs, double z, coordinate='cartesian', simplify=False, noise=True, unique=False, mu_opt=False, double k_max_bi=2333):
         """
         """
-        db_shape = (5, 5)
-        integrand_db = np.zeros(db_shape)
+        integrand_db = np.zeros(self.db_shape)
         cdef double k1_var, k2_var, k3_var, mu1_var, mu2_var
         cdef double k1, k2, k3, mu1, mu2
         cdef unsigned int i, j
@@ -662,7 +707,7 @@ class survey:
         if coordinate == 'cartesian':
             k1, k2, k3 = kargs
             if beta(cost(*kargs)) == 0.0:
-                return np.zeros(db_shape)
+                return np.zeros(self.db_shape)
             cos12 = cost(*kargs)
         elif coordinate == 'child18':
             k1, k2, k3 = k_tf(*kargs)
@@ -670,7 +715,7 @@ class survey:
         elif coordinate =='ascending':
             k1, k2, k3 = k_tf_as(*kargs)
             if beta(cost(k1, k2, k3)) == 0.0:
-                return np.zeros(db_shape)
+                return np.zeros(self.db_shape)
             cos12 = cost(k1, k2, k3)
 
         if mu_opt == True:
@@ -685,20 +730,21 @@ class survey:
         mu3 = - (k1*mu1+k2*mu2)/k3
 
         if unique==True and (not is_unique(k1, k2, k3)):
-            return np.zeros(db_shape)
+            return np.zeros(self.db_shape)
         angular_factor = sigma_angle(mu1, mu2, cos12)
         if 'RSD' in self.ingredients and (angular_factor == 0.) and (not mu_opt):
             #print(1 - cos12**2 -mu1**2 - mu2**2 + 2*mu1*mu2*cos12)
-            return np.zeros(db_shape)
+            return np.zeros(self.db_shape)
         if k1>k_max_bi or k2>k_max_bi or k3>k_max_bi:
-            return np.zeros(db_shape)
+            return np.zeros(self.db_shape)
 
         db = self.bispectrum_derivative(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
         db_bias = self.bispectrum_derivative_bias(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
-        db = np.concatenate((db, db_bias))
+        db_additional = self.bispectrum_derivative_additional(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
+        db = np.concatenate((db, db_additional, db_bias))
 
-        for i in range(int(db_shape[0])):
-            for j in range(int(db_shape[1])):
+        for i in range(int(self.db_shape[0])):
+            for j in range(int(self.db_shape[1])):
                 integrand_db[i,j] = db[i]*db[j]
         p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z, noise=noise), self.power_spectrum(k2, mu=mu2, z=z, noise=noise), self.power_spectrum(k3, mu=mu3, z=z, noise=noise)
         
@@ -731,9 +777,8 @@ class survey:
                 -monte carlo
         """
         #print(method)
-        db_shape = (5, 5)
         cdef unsigned int len_kmu = len(self.kkkmu_list)
-        ints = np.zeros((len_kmu, *db_shape))
+        ints = np.zeros((len_kmu, *(self.db_shape)))
         #cdef double [:,:,:] res_view = res
         cdef double [:,:,:] ints_view = ints
         cdef unsigned int i, j, k
@@ -742,8 +787,8 @@ class survey:
 
         for i in range(len_kmu):
             arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, unique=unique, mu_opt=mu_opt, k_max_bi=self.k_max_bi)
-            for j in range(db_shape[0]):
-                for k in range(db_shape[1]):
+            for j in range(self.db_shape[0]):
+                for k in range(self.db_shape[1]):
                     ints_view[i,j,k] = arr[j,k]
         
         #print(time.time()-t0)
@@ -757,7 +802,7 @@ class survey:
             if method == 'trapezoidal':
                 int_func = integrate.trapz
             
-            ints = ints.reshape(*(self.divs), *db_shape)
+            ints = ints.reshape(*(self.divs), *(self.db_shape))
             #print(ints)
             #self.ints = ints
             ints = int_func(ints, self.k1_list, axis=0)
@@ -787,8 +832,7 @@ class survey:
         """
         integration methods: naive, monte_carlo, simpson, trapezoidal, sobol
         """
-        db_shape = (5, 5)
-        fisher_bs_list = np.zeros((len(self.zmid_list), *db_shape))
+        fisher_bs_list = np.zeros((len(self.zmid_list), *(self.db_shape)))
 
         self.evaluation_count = 0
         self.sampling_count = 0
@@ -797,7 +841,7 @@ class survey:
         for iz in range(len(self.zmid_list)):
             z = self.zmid_list[iz]
             dz = self.dz_list[iz]
-            fisher_temp = np.zeros(db_shape)
+            fisher_temp = np.zeros(self.db_shape)
             if z+dz/2 <= self.z_max_int:
                 v = self.survey_volume(self.f_sky, z-dz/2, z+dz/2)
             else:
@@ -872,12 +916,13 @@ class survey:
         self.fisher_bs_list = np.array(fisher_bs_list)
         #self.fisher_bs = np.sum(fisher_bs_list, axis=0)
 
-        fisher_bs = np.zeros((2+len(self.fisher_bs_list)*3, 2+len(self.fisher_bs_list)*3))
-        fisher_bs[:2, :2] = np.sum(fisher_bs_list, axis=0)[:2, :2]
+        nap = len(self.additional_parameters)
+        fisher_bs = np.zeros((2+nap+len(self.fisher_bs_list)*3, 2+nap+len(self.fisher_bs_list)*3))
+        fisher_bs[:2+nap, :2+nap] = np.sum(fisher_bs_list, axis=0)[:2+nap, :2+nap]
         for i in range(len(self.fisher_bs_list)):
-            fisher_bs[2+3*i:2+3*i+3, 2+3*i:2+3*i+3] = fisher_bs_list[i][2:, 2:]
-            fisher_bs[2+3*i:2+3*i+3, :2] = fisher_bs_list[i][2:, :2]
-            fisher_bs[:2, 2+3*i:2+3*i+3] = fisher_bs_list[i][:2, 2:]
+            fisher_bs[2+nap+3*i:2+nap+3*i+3, 2+nap+3*i:2+nap+3*i+3] = fisher_bs_list[i][2+nap:, 2+nap:]
+            fisher_bs[2+nap+3*i:2+nap+3*i+3, :2+nap] = fisher_bs_list[i][2+nap:, :2+nap]
+            fisher_bs[:2+nap, 2+nap+3*i:2+nap+3*i+3] = fisher_bs_list[i][:2+nap, 2+nap:]
         #print(fisher_bs)
         self.fisher_bs = fisher_bs
         # if addprior == True:
