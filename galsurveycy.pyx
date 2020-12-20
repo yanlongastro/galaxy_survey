@@ -2,7 +2,7 @@
 """
 Created on Fri Feb 21 14:03:10 2020
 
-Cosmological Galaxy Survey (cython version)
+Cosmological Galaxy Survey (Cython version)
 
 @author: yanlong@caltech.edu
 """
@@ -190,10 +190,11 @@ class ps_interpolation:
     """
     Intepolates the power spectrum from data.
     ps, ps_nw: txt files
+    additional_ps_derivatives: dp/d(parameter) as a function of k; this is a dict.
     """
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    def __init__(self, ps_file, ps_nw_file, k=1, scipy_interp=False):
+    def __init__(self, ps_file, ps_nw_file, k=1, scipy_interp=False, additional_ps_derivatives:dict={}):
         pdata = np.loadtxt(ps_file)
         pnwdata = np.loadtxt(ps_nw_file)
         pdata_log = np.log10(pdata)
@@ -226,6 +227,20 @@ class ps_interpolation:
             self.oscillation_part = lambda x: two_value_interpolation_c(oscdata[:,0], oscdata[:,1], x, n)
             self.oscillation_part_derivative = lambda x: two_value_interpolation_c(dodkdata[:,0], dodkdata[:,1], x, n-1)
             self.matter_power_spectrum_derivative = lambda x: two_value_interpolation_c(dpdkdata[:,0], dpdkdata[:,1], x, n-1)
+
+
+        self.additional_parameters = list(additional_ps_derivatives.keys())
+        self.matter_power_spectrum_derivative_additional = []
+        for key in additional_ps_derivatives.keys():
+            pdata = additional_ps_derivatives[key]['ps_derivatives']
+            func = 'matter_power_spectrum_derivative_'+key
+            if scipy_interp:
+                dpdp = InterpolatedUnivariateSpline(pdata[:,0], pdata[:,1], k=k)
+            else:
+                n = len(pdata)
+                dpdp = lambda x, pdata=pdata, n=n: two_value_interpolation_c(pdata[:,0], pdata[:,1], x, n)
+            self.matter_power_spectrum_derivative_additional.append(dpdp)
+
             
 
 
@@ -239,8 +254,6 @@ class survey:
     priors (dict of dict): alpha_prior, beta_prior ([mean, stdev])
 
     todos:  - add a fiducial cosmology
-            - add survey_type
-            - try other integration methods: e.g., simps
             - add FOG
     """
     def __init__(self, cosmo, ps, survey_geometrics, survey_parameters, ingredients, priors):
@@ -259,8 +272,8 @@ class survey:
 
     #def get_ready(self):
         if hasattr(self, 'ng_z_list'):
-            self.z_min = self.ng_z_list[0,0] - self.dz/2
-            self.z_max = self.ng_z_list[-1,0] + self.dz/2
+            self.z_min = self.ng_z_list[0,0] - self.ng_z_list[0,2]/2
+            self.z_max = self.ng_z_list[-1,0] + self.ng_z_list[-1,2]/2
             self.z_max_int = self.z_max
         self.V_tot = self.survey_volume(self.f_sky, self.z_min, self.z_max)
 
@@ -268,6 +281,7 @@ class survey:
             if hasattr(self, 'ng_z_list'):
                 self.ng = InterpolatedUnivariateSpline(self.ng_z_list[:,0], self.ng_z_list[:,1], k=1)
                 self.zmid_list = self.ng_z_list[:,0]
+                self.dz_list = self.ng_z_list[:,2]
             else:
                 self.ng = lambda x: self.N_g/self.V_tot
                 number_z = int(np.floor((self.z_max-self.z_min)/self.dz))
@@ -275,6 +289,7 @@ class survey:
                 self.zmid_list = np.linspace(self.z_min+self.dz/2, self.z_max_int-self.dz/2, num=number_z)
                 if self.z_max_int != self.z_max:
                     self.zmid_list = np.append(self.zmid_list, (self.z_max+self.z_max_int)/2.0)
+                self.dz_list = np.repeat(self.dz, len(self.zmid_list))
         else:
             pass
 
@@ -297,6 +312,16 @@ class survey:
         bias = self.cosmo.D0/self.cosmo.linear_growth_factor(z)*self.b_0
         return bias
 
+    def galactic_bias_b2(self, z):
+        # Ref: https://arxiv.org/pdf/1511.01096.pdf
+        b1 = self.galactic_bias(z)
+        b2 = 0.412 - 2.143* b1 + 0.929* pow(b1, 2) + 0.008* pow(b1, 3)
+        return b2
+
+    def galactic_bias_bs2(self, z):
+        return 0.0
+
+
     def damping_factor(self, k, mu=0.0, z=0.0):
         if 'damping' not in self.ingredients:
             return 1.0
@@ -318,10 +343,17 @@ class survey:
         damping = exp(-0.5*pow(k, 2)* (pow(Sigma_vertical, 2)+pow(mu, 2)*(pow(Sigma_parallel, 2)-pow(Sigma_vertical,2))))
         return damping
 
-    def rsd_factor_z1(self, z, mu=0.0):
+    def rsd_factor_z1(self, z, mu=0.0, external_biases=False, biases=(1., -1., 0.)):
+        """
+        Red shift distorsion effects. Use dedicated external bias factors instead if external_biases option on.
+        """
         if 'RSD' not in self.ingredients:
             return 1.0
-        rsd = self.galactic_bias(z) + self.cosmo.linear_growth_rate(z)*pow(mu, 2)
+        
+        if not external_biases:
+            rsd = self.galactic_bias(z) + self.cosmo.linear_growth_rate(z)*pow(mu, 2)
+        else:
+            rsd = biases[0] + self.cosmo.linear_growth_rate(z)*pow(mu, 2)
         return rsd
 
     def fog_factor(self, k, mu=0.0):
@@ -420,10 +452,12 @@ class survey:
         """
         fisher_ps_list = np.zeros((len(self.zmid_list), 2, 2))
         
-        for z in self.zmid_list:
+        for iz in range(len(self.zmid_list)):
+            z = self.zmid_list[iz]
+            dz = self.dz_list[iz]
             fisher_temp = np.zeros((2,2))
-            if z+self.dz/2 <= self.z_max_int:
-                v = self.survey_volume(self.f_sky, z-self.dz/2, z+self.dz/2)
+            if z+dz/2 <= self.z_max_int:
+                v = self.survey_volume(self.f_sky, z-dz/2, z+dz/2)
             else:
                 v = self.survey_volume(self.f_sky, self.z_max_int, self.z_max)
             
@@ -470,7 +504,7 @@ class survey:
         return self.fisher_ps
 
 
-    def rsd_factor_z2(self, double k1, double k2, double cos12, mu1=0, mu2=0, z=0):
+    def rsd_factor_z2(self, double k1, double k2, double cos12, mu1=0, mu2=0, z=0, external_biases=False, biases=(1., -1., 0.)):
         """
         Z_2 factor for RSD
         """
@@ -480,9 +514,12 @@ class survey:
         k12 = sqrt(k1*k1+k2*k2+2*k1*k2*cos12)
         mu12 = (k1*mu1+k2*mu2)/k12
         f = self.cosmo.linear_growth_rate(z)
-        b = self.galactic_bias(z)
-        b2 = 0.0
-        bs2 = 0.0
+        if not external_biases:
+            b = self.galactic_bias(z)
+            b2 = self.galactic_bias_b2(z)
+            bs2 = self.galactic_bias_bs2(z)
+        else:
+            b, b2, bs2 = biases
         s12 = cos12*cos12 -1./3.
         res = b2/2 +b*f12 +f*mu12*mu12*g12
         res += f*mu12*k12/2*(mu1/k1*self.rsd_factor_z1(z, mu=mu2) +mu2/k2*self.rsd_factor_z1(z, mu=mu1))
@@ -492,7 +529,7 @@ class survey:
 
 
 
-    def bispectrum(self, kargs, muargs=(0., 0., 0.), z=0., coordinate='cartesian', nw=False, noise=False):
+    def bispectrum(self, kargs, muargs=(0., 0., 0.), z=0., coordinate='cartesian', nw=False, noise=False, external_biases=False, biases=(1., -1., 0.)):
         """
         todos: derive bispectrum in galsurvey, currently the functions should use with no ingredients
         mu1, mu2, mu3 are not all independent
@@ -506,12 +543,12 @@ class survey:
         mu1, mu2, mu3 = muargs
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
 
-        z12 = self.rsd_factor_z2(k_1, k_2, cos12, mu1=mu1, mu2=mu2, z=z)
-        z23 = self.rsd_factor_z2(k_2, k_3, cos23, mu1=mu2, mu2=mu3, z=z)
-        z31 = self.rsd_factor_z2(k_3, k_1, cos31, mu1=mu3, mu2=mu1, z=z)
-        z1 = self.rsd_factor_z1(z, mu=mu1)
-        z2 = self.rsd_factor_z1(z, mu=mu2)
-        z3 = self.rsd_factor_z1(z, mu=mu3)
+        z12 = self.rsd_factor_z2(k_1, k_2, cos12, mu1=mu1, mu2=mu2, z=z, external_biases=external_biases, biases=biases)
+        z23 = self.rsd_factor_z2(k_2, k_3, cos23, mu1=mu2, mu2=mu3, z=z, external_biases=external_biases, biases=biases)
+        z31 = self.rsd_factor_z2(k_3, k_1, cos31, mu1=mu3, mu2=mu1, z=z, external_biases=external_biases, biases=biases)
+        z1 = self.rsd_factor_z1(z, mu=mu1, external_biases=external_biases, biases=biases)
+        z2 = self.rsd_factor_z1(z, mu=mu2, external_biases=external_biases, biases=biases)
+        z3 = self.rsd_factor_z1(z, mu=mu3, external_biases=external_biases, biases=biases)
 
         p1 = self.power_spectrum(k_1, mu=mu1, z=z, nw=nw, linear=True)
         p2 = self.power_spectrum(k_2, mu=mu2, z=z, nw=nw, linear=True)
@@ -563,6 +600,35 @@ class survey:
         return res
 
 
+    def bispectrum_derivative_bias(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian', nw=False, noise=False):
+        """
+        Calculate the derivative in terms of bias factors numerically.
+        """
+        b = self.galactic_bias(z)
+        b2 = self.galactic_bias_b2(z)
+        bs2 = self.galactic_bias_bs2(z)
+        biases = [b, b2, bs2]
+        eps = 0.05      # assuming 5% step increment
+        dbiases = [eps, eps, eps]
+        dBdb = np.array([0., 0., 0.])
+        for i in range(len(dBdb)):
+            biases_temp = biases
+            biases_temp[i] -= dbiases[i]
+            Bm = self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate, nw=nw, external_biases=True, biases=tuple(biases_temp))
+
+            biases_temp = biases
+            biases_temp[i] += dbiases[i]
+            Bp = self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate, nw=nw, external_biases=True, biases=tuple(biases_temp))
+
+            #print(Bm, Bp)
+            dBdb[i] = (Bp-Bm)/(2.*dbiases[i])
+        return dBdb
+
+
+    def bispectrum_derivative_additional(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian', nw=False, noise=False):
+        2333
+
+
 
     def R_bi(self, kargs, muargs=(0.,0.,0.), z=0, coordinate='child18'):
         return self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate)/self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate, nw=True)
@@ -584,7 +650,8 @@ class survey:
     def integrand_bs(self, (double, double, double, double, double) kmuargs, double z, coordinate='cartesian', simplify=False, noise=True, unique=False, mu_opt=False, double k_max_bi=2333):
         """
         """
-        integrand_db = np.zeros((2, 2))
+        db_shape = (5, 5)
+        integrand_db = np.zeros(db_shape)
         cdef double k1_var, k2_var, k3_var, mu1_var, mu2_var
         cdef double k1, k2, k3, mu1, mu2
         cdef unsigned int i, j
@@ -595,7 +662,7 @@ class survey:
         if coordinate == 'cartesian':
             k1, k2, k3 = kargs
             if beta(cost(*kargs)) == 0.0:
-                return np.zeros((2,2))
+                return np.zeros(db_shape)
             cos12 = cost(*kargs)
         elif coordinate == 'child18':
             k1, k2, k3 = k_tf(*kargs)
@@ -603,7 +670,7 @@ class survey:
         elif coordinate =='ascending':
             k1, k2, k3 = k_tf_as(*kargs)
             if beta(cost(k1, k2, k3)) == 0.0:
-                return np.zeros((2,2))
+                return np.zeros(db_shape)
             cos12 = cost(k1, k2, k3)
 
         if mu_opt == True:
@@ -618,17 +685,20 @@ class survey:
         mu3 = - (k1*mu1+k2*mu2)/k3
 
         if unique==True and (not is_unique(k1, k2, k3)):
-            return np.zeros((2, 2))
+            return np.zeros(db_shape)
         angular_factor = sigma_angle(mu1, mu2, cos12)
         if 'RSD' in self.ingredients and (angular_factor == 0.) and (not mu_opt):
             #print(1 - cos12**2 -mu1**2 - mu2**2 + 2*mu1*mu2*cos12)
-            return np.zeros((2, 2))
+            return np.zeros(db_shape)
         if k1>k_max_bi or k2>k_max_bi or k3>k_max_bi:
-            return np.zeros((2, 2))
+            return np.zeros(db_shape)
 
         db = self.bispectrum_derivative(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
-        for i in range(2):
-            for j in range(2):
+        db_bias = self.bispectrum_derivative_bias(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, noise=noise)
+        db = np.concatenate((db, db_bias))
+
+        for i in range(int(db_shape[0])):
+            for j in range(int(db_shape[1])):
                 integrand_db[i,j] = db[i]*db[j]
         p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z, noise=noise), self.power_spectrum(k2, mu=mu2, z=z, noise=noise), self.power_spectrum(k3, mu=mu3, z=z, noise=noise)
         
@@ -645,6 +715,7 @@ class survey:
                 #integrand *= sigma_angle(mu1, mu2, cos12) * (1-cos12**2)**1. * mu_r
                 integrand *= 1/(2*pi)
         self.evaluation_count += 1
+
         return integrand
             
 
@@ -660,8 +731,9 @@ class survey:
                 -monte carlo
         """
         #print(method)
+        db_shape = (5, 5)
         cdef unsigned int len_kmu = len(self.kkkmu_list)
-        ints = np.zeros((len_kmu, 2, 2))
+        ints = np.zeros((len_kmu, *db_shape))
         #cdef double [:,:,:] res_view = res
         cdef double [:,:,:] ints_view = ints
         cdef unsigned int i, j, k
@@ -670,8 +742,8 @@ class survey:
 
         for i in range(len_kmu):
             arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, unique=unique, mu_opt=mu_opt, k_max_bi=self.k_max_bi)
-            for j in range(2):
-                for k in range(2):
+            for j in range(db_shape[0]):
+                for k in range(db_shape[1]):
                     ints_view[i,j,k] = arr[j,k]
         
         #print(time.time()-t0)
@@ -685,7 +757,7 @@ class survey:
             if method == 'trapezoidal':
                 int_func = integrate.trapz
             
-            ints = ints.reshape(*(self.divs), 2, 2)
+            ints = ints.reshape(*(self.divs), *db_shape)
             #print(ints)
             #self.ints = ints
             ints = int_func(ints, self.k1_list, axis=0)
@@ -713,24 +785,21 @@ class survey:
 
     def fisher_matrix_bs(self, regions, method='sobol', addprior=False, tol=1e-4, rtol=1e-4, unique=True, verbose=False, k_max_bi=2333.):
         """
-        todos:  - test this method
-                - the upper bound of k1 is probably too small
-                - check higher orders; or SPT alternative
+        integration methods: naive, monte_carlo, simpson, trapezoidal, sobol
         """
-        """
-        integration methods: naive, monte_carlo, simpson, trapezoidal
-        divideby: num, step
-        """
-        fisher_bs_list = np.zeros((len(self.zmid_list), 2, 2))
+        db_shape = (5, 5)
+        fisher_bs_list = np.zeros((len(self.zmid_list), *db_shape))
 
         self.evaluation_count = 0
         self.sampling_count = 0
         self.k_max_bi = k_max_bi
         
-        for z in self.zmid_list:
-            fisher_temp = np.zeros((2,2))
-            if z+self.dz/2 <= self.z_max_int:
-                v = self.survey_volume(self.f_sky, z-self.dz/2, z+self.dz/2)
+        for iz in range(len(self.zmid_list)):
+            z = self.zmid_list[iz]
+            dz = self.dz_list[iz]
+            fisher_temp = np.zeros(db_shape)
+            if z+dz/2 <= self.z_max_int:
+                v = self.survey_volume(self.f_sky, z-dz/2, z+dz/2)
             else:
                 v = self.survey_volume(self.f_sky, self.z_max_int, self.z_max)
 
@@ -801,7 +870,16 @@ class survey:
                 print('%.3f'%z, fisher_temp.flatten())
         
         self.fisher_bs_list = np.array(fisher_bs_list)
-        self.fisher_bs = np.sum(fisher_bs_list, axis=0)
+        #self.fisher_bs = np.sum(fisher_bs_list, axis=0)
+
+        fisher_bs = np.zeros((2+len(self.fisher_bs_list)*3, 2+len(self.fisher_bs_list)*3))
+        fisher_bs[:2, :2] = np.sum(fisher_bs_list, axis=0)[:2, :2]
+        for i in range(len(self.fisher_bs_list)):
+            fisher_bs[2+3*i:2+3*i+3, 2+3*i:2+3*i+3] = fisher_bs_list[i][2:, 2:]
+            fisher_bs[2+3*i:2+3*i+3, :2] = fisher_bs_list[i][2:, :2]
+            fisher_bs[:2, 2+3*i:2+3*i+3] = fisher_bs_list[i][:2, 2:]
+        #print(fisher_bs)
+        self.fisher_bs = fisher_bs
         # if addprior == True:
         #     self.fisher_bs[0,0] += 1/self.alpha_prior['stdev']**2
         #     self.fisher_bs[1,1] += 1/self.beta_prior['stdev']**2
