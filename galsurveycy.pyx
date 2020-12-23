@@ -321,7 +321,10 @@ class survey:
         return b2
 
     def galactic_bias_bs2(self, z):
-        return 0.0
+        # Ref: https://arxiv.org/pdf/1405.1447.pdf (eq. 39)
+        b1 = self.galactic_bias(z)
+        bs2 = 4./7.*(1.-b1)
+        return bs2
 
 
     def damping_factor(self, k, mu=0.0, z=0.0):
