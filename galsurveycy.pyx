@@ -307,6 +307,16 @@ class survey:
         h = self.cosmo.h
         v = (astropy_cosmo.comoving_volume(zmax)-astropy_cosmo.comoving_volume(zmin))*f_sky
         return v.value*h**3
+
+
+    def ap_effect(self, z):
+        """
+        Alcock-Polzyniski effect
+        """
+        a_parallel = (self.fiducial_cosmology.H(z)*self.fiducial_cosmology.s_f) / (self.cosmology.H(z)*self.cosmology.s_f)
+        a_perpendicular = (self.fiducial_cosmology.s_f/self.fiducial_cosmology.astropy_cosmology.angular_diameter_distance(z)) / (self.cosmology.s_f/self.cosmology.astropy_cosmology.angular_diameter_distance(z))
+        a = pow(pow(a_perpendicular, 2)*a_parallel, 1./3.)
+        return a_parallel, a_perpendicular, a
     
     def galactic_bias(self, z):
         if 'galactic_bias' not in self.ingredients:
