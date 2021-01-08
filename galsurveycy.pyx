@@ -194,7 +194,8 @@ class ps_interpolation:
     """
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    def __init__(self, ps_file, ps_nw_file, k=1, scipy_interp=False, additional_ps_derivatives:dict={}):
+    def __init__(self, ps_file, ps_nw_file, k=1, scipy_interp=False, additional_ps_derivatives:dict={}, cosmo=None):
+        self.cosmo = cosmo
         pdata = np.loadtxt(ps_file)
         pnwdata = np.loadtxt(ps_nw_file)
         pdata_log = np.log10(pdata)
@@ -246,17 +247,16 @@ class ps_interpolation:
 
 class survey:
     """
-    cosmo: cosmology class
+    cosmo: cosmology class (fiducial cosmology)
     ps: ps_interpolation class
     survey geometrics (dict): f_sky, N_g, z_min, z_max, dz, ng_z_list ([zmid_list, ng_list])
-    survey parameters (dict): Sigma_0, reconstruction_rate, b_0, survey_type
+    survey parameters (dict): Sigma_0, reconstruction_rate, b_0, survey_type, sigma_p
     ingredients (list): 'RSD', 'damping', 'FOG', 'galactic_bias'
-    priors (dict of dict): alpha_prior, beta_prior ([mean, stdev])
+    initial_params (dict of dict): alpha, beta ([value, stdev])
 
-    todos:  - add a fiducial cosmology
-            - add FOG
+    todos:  - add FOG
     """
-    def __init__(self, cosmo, ps, survey_geometrics, survey_parameters, ingredients, priors):
+    def __init__(self, cosmo, ps, survey_geometrics, survey_parameters, ingredients, initial_params):
         self.cosmo = cosmo
         self.pisf = pi/self.cosmo.s_f
         self.ps = ps
@@ -266,8 +266,8 @@ class survey:
         for key in survey_parameters:
             setattr(self, key, survey_parameters[key])
         self.ingredients = ingredients
-        for key in priors:
-            setattr(self, key, priors[key])
+        for key in initial_params:
+            setattr(self, key, initial_params[key])
 
         self.evaluation_count = 0
         self.db_shape = (2+len(self.additional_parameters)+3, 2+len(self.additional_parameters)+3)
@@ -309,14 +309,36 @@ class survey:
         return v.value*h**3
 
 
-    def ap_effect(self, z):
+    def ap_factor(self, z):
         """
-        Alcock-Polzyniski effect
+        Alcock-Paczyniski effect
         """
-        a_parallel = (self.fiducial_cosmology.H(z)*self.fiducial_cosmology.s_f) / (self.cosmology.H(z)*self.cosmology.s_f)
-        a_perpendicular = (self.fiducial_cosmology.s_f/self.fiducial_cosmology.astropy_cosmology.angular_diameter_distance(z)) / (self.cosmology.s_f/self.cosmology.astropy_cosmology.angular_diameter_distance(z))
-        a = pow(pow(a_perpendicular, 2)*a_parallel, 1./3.)
-        return a_parallel, a_perpendicular, a
+        if z <= 0.0:
+            z = 1e-5
+        a_parallel = (self.cosmo.astropy_cosmology.H(z).value*self.cosmo.s_f) / (self.ps.cosmo.astropy_cosmology.H(z).value*self.ps.cosmo.s_f)
+        a_vertical = (self.cosmo.s_f/self.cosmo.astropy_cosmology.angular_diameter_distance(z).value) / (self.ps.cosmo.s_f/self.ps.cosmo.astropy_cosmology.angular_diameter_distance(z).value)
+        a = pow(pow(a_vertical, 2)*a_parallel, 1./3.)
+        return a_parallel, a_vertical, a
+
+
+    def ap_factor_reduced(self, z):
+        """
+        Alcock-Paczyniski effect: but reduce the r_s^fid/r_s factor
+        """
+        if z <= 0.0:
+            z = 1e-5
+        a_parallel = (self.cosmo.astropy_cosmology.H(z).value) / (self.ps.cosmo.astropy_cosmology.H(z).value)
+        a_vertical = (1.0/self.cosmo.astropy_cosmology.angular_diameter_distance(z).value) / (1.0/self.ps.cosmo.astropy_cosmology.angular_diameter_distance(z).value)
+        a = pow(pow(a_vertical, 2)*a_parallel, 1./3.)
+        return a
+
+
+    def k_reduced(self, k, z=0.0, ap_effect=True, phase_shift=True):
+        if ap_effect:
+            k = k/self.alpha['value']/self.ap_factor_reduced(z)
+        if phase_shift:
+            k += (self.beta['value']-1)*f_phase(k)/self.cosmo.s_f
+        return k
     
     def galactic_bias(self, z):
         if 'galactic_bias' not in self.ingredients:
@@ -377,10 +399,9 @@ class survey:
         fog = exp(-pow(k*mu*self.sigma_p, 2)/2.)
         return fog
 
-    def oscillation_part(self, k, mu=0.0, z=0.0, damp=True, priors=True):
-        if priors == True:
-            k = k/self.alpha_prior['mean'] + (self.beta_prior['mean']-1)*f_phase(k)/self.cosmo.s_f
-        osc = self.ps.oscillation_part(k/self.alpha_prior['mean'] + (self.beta_prior['mean']-1)*f_phase(k)/self.cosmo.s_f)
+    def oscillation_part(self, k, mu=0.0, z=0.0, damp=True, ap_effect=True, phase_shift=True):
+        k = self.k_reduced(k, z, ap_effect, phase_shift)
+        osc = self.ps.oscillation_part(k)
         osc *= (self.damping_factor(k, mu, z) if damp==True else 1.0)
         return osc
         
@@ -396,7 +417,7 @@ class survey:
         return p
 
     def power_spectrum_derivative(self, double k, mu=0.0, z=0.0, linear=False):
-        k_t = k/self.alpha_prior['mean'] + (self.beta_prior['mean']-1)*f_phase(k)/self.cosmo.s_f
+        k_t = self.k_reduced(k, z)
         # dodk = misc.derivative(self.ps.oscillation_part, k_t, dx=1e-6)
         dodk = self.ps.oscillation_part_derivative(k_t)
         p = self.ps.matter_power_spectrum_no_wiggle(k)
@@ -405,7 +426,7 @@ class survey:
             dpdk *= pow(self.rsd_factor_z1(z, mu), 2)
         dpdk *= pow(self.cosmo.linear_growth_factor(z)/self.cosmo.D0, 2)
         dpdk *= self.damping_factor(k, mu, z)
-        dpd_alpha = dpdk*(-k/pow(self.alpha_prior['mean'], 2))
+        dpd_alpha = dpdk*(-k/self.ap_factor_reduced(z)/pow(self.alpha['value'], 2))
         dpd_beta = dpdk*(f_phase(k)/self.cosmo.s_f)
         return np.array([dpd_alpha, dpd_beta])
 
@@ -425,11 +446,11 @@ class survey:
         """
         if simplify is True:
             integrand_do = np.zeros((2,2))
-            k_t = k/self.alpha_prior['mean'] + (self.beta_prior['mean']-1)*f_phase(k)/self.cosmo.s_f
+            k_t = self.k_reduced(k, z)
             dodk = misc.derivative(self.ps.oscillation_part, k_t, dx=1e-6)
             damp = self.damping_factor(k, mu, z)
             dodk *= damp
-            dod_alpha = dodk*(-k/self.alpha_prior['mean']**2)
+            dod_alpha = dodk*(-k/self.ap_factor_reduced(z)/self.alpha['value']**2)
             dod_beta = dodk*(f_phase(k)/self.cosmo.s_f)
             do = np.array([dod_alpha, dod_beta])
             #integrand_do = do[i]*do[j]
@@ -519,9 +540,9 @@ class survey:
             #print('\t', z, v, fisher_temp[1,1], self.naive_integration_ps(args=(z,), parallel=parallel))
         self.fisher_ps_list = np.array(fisher_ps_list)
         self.fisher_ps = np.sum(fisher_ps_list, axis=0)
-        if addprior == True:
-            self.fisher_ps[0,0] += 1/self.alpha_prior['stdev']**2
-            self.fisher_ps[1,1] += 1/self.beta_prior['stdev']**2
+        # if addprior == True:
+        #     self.fisher_ps[0,0] += 1/self.alpha['stdev']**2
+        #     self.fisher_ps[1,1] += 1/self.beta['stdev']**2
         fisher_ps_inv = np.linalg.inv(self.fisher_ps)
         self.alpha_stdev = sqrt(fisher_ps_inv[0,0])
         self.beta_stdev = sqrt(fisher_ps_inv[1,1])
@@ -939,20 +960,17 @@ class survey:
         #print(fisher_bs)
         self.fisher_bs = fisher_bs
         # if addprior == True:
-        #     self.fisher_bs[0,0] += 1/self.alpha_prior['stdev']**2
-        #     self.fisher_bs[1,1] += 1/self.beta_prior['stdev']**2
+        #     self.fisher_bs[0,0] += 1/self.alpha['stdev']**2
+        #     self.fisher_bs[1,1] += 1/self.beta['stdev']**2
         # fisher_bs_inv = np.linalg.inv(self.fisher_bs)
         # self.alpha_stdev_bs = sqrt(fisher_bs_inv[0,0])
         # self.beta_stdev_bs = sqrt(fisher_bs_inv[1,1])
         return self.fisher_bs
 
 
-    def add_prior(self, fisher):
-        fisher[0,0] += 1/self.alpha_prior['stdev']**2
-        fisher[1,1] += 1/self.beta_prior['stdev']**2
-        fisher_inv = np.linalg.inv(fisher)
-        alpha_stdev = sqrt(fisher_inv[0,0])
-        beta_stdev = sqrt(fisher_inv[1,1])
-        return fisher, alpha_stdev, beta_stdev
 
-
+def get_constraints(fisher):
+    s = np.linalg.inv(fisher)
+    s = np.diag(s)
+    s = np.sqrt(s)
+    return s
