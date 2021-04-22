@@ -102,19 +102,7 @@ def s123(double k1, double k2, double k3):
 
 
 
-#cpdef double [:,:] prange_loop(integrand, params, args):
-#    cdef int iter_max = len(params)
-#    cdef int i, j, k
-#    res = np.zeros((iter_max, 2, 2))
-#    db = np.zeros((2, 2))
-#    cdef double [:,:,:] res_view = res
-#    for i in prange(iter_max, nogil=True):
-#        db = integrand(params[i], *args)
-#        with gil:
-#            for j in range(2):
-#                for k in range(2):
-#                    res_view[i, j, k] = db[j, k]
-#    return res
+
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def two_value_interpolation_c(np.ndarray[np.float64_t] x, np.ndarray[np.float64_t] y, np.float64_t val, np.int64_t n):
@@ -130,7 +118,6 @@ def two_value_interpolation_c(np.ndarray[np.float64_t] x, np.ndarray[np.float64_
     index_min = 0
     while index_min < index_max:
        index_mid = index_min + ((index_max-index_min)>>1)
-       #print(index_mid, index_max, index_min)
        if x[index_mid] <= val:
            index_min = index_mid+1
        else:
@@ -194,15 +181,16 @@ class ps_interpolation:
     """
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    def __init__(self, ps_file, ps_nw_file, k=1, scipy_interp=False, additional_ps_derivatives:dict={}, cosmo=None):
+    def __init__(self, ps_file, ps_nw_file, k=1, scipy_interp=False, additional_ps_derivatives:dict={}, cosmo=None, ap_effect=True):
         self.cosmo = cosmo
+        self.ap_effect = ap_effect
         pdata = np.loadtxt(ps_file)
         pnwdata = np.loadtxt(ps_nw_file)
         pdata_log = np.log10(pdata)
         
         pnwdata_log = np.log10(pnwdata)
         
-        oscdata = np.transpose([pdata[:,0], pdata[:,1]/pnwdata[:,1]-1])
+        oscdata = np.transpose([pdata[:,0], pdata[:,1]/pnwdata[:,1]-1.])
         
         doscdk = np.diff(oscdata[:,1])/np.diff(oscdata[:,0])
         dodkdata = np.transpose([oscdata[:,0][:-1], doscdk ])
@@ -232,15 +220,20 @@ class ps_interpolation:
 
         self.additional_parameters = list(additional_ps_derivatives.keys())
         self.matter_power_spectrum_derivative_additional = []
-        for key in additional_ps_derivatives.keys():
-            pdata = additional_ps_derivatives[key]['ps_derivatives']
-            func = 'matter_power_spectrum_derivative_'+key
-            if scipy_interp:
-                dpdp = InterpolatedUnivariateSpline(pdata[:,0], pdata[:,1], k=k)
-            else:
-                n = len(pdata)
-                dpdp = lambda x, pdata=pdata, n=n: two_value_interpolation_c(pdata[:,0], pdata[:,1], x, n)
-            self.matter_power_spectrum_derivative_additional.append(dpdp)
+
+        if not ap_effect:
+            for key in additional_ps_derivatives.keys():
+                pdata = additional_ps_derivatives[key]['ps_derivatives']
+                func = 'matter_power_spectrum_derivative_'+key
+                if scipy_interp:
+                    dpdp = lambda x, mu=0, z=0: InterpolatedUnivariateSpline(pdata[:,0], pdata[:,1], k=k)(x)
+                else:
+                    n = len(pdata)
+                    dpdp = lambda x, mu=0, z=0, pdata=pdata, n=n: two_value_interpolation_c(pdata[:,0], pdata[:,1], x, n)
+                self.matter_power_spectrum_derivative_additional.append(dpdp)
+        else:
+            for key in additional_ps_derivatives.keys():
+                self.matter_power_spectrum_derivative_additional.append(additional_ps_derivatives[key]['ps_derivatives_ap'])
 
             
 
@@ -270,7 +263,6 @@ class survey:
             setattr(self, key, initial_params[key])
 
         self.evaluation_count = 0
-        self.db_shape = (2+len(self.additional_parameters)+3, 2+len(self.additional_parameters)+3)
 
     #def get_ready(self):
         if hasattr(self, 'ng_z_list'):
@@ -298,6 +290,10 @@ class survey:
         r = np.array([1.0, 0.9, 0.8, 0.7, 0.6, 0.55, 0.52, 0.5])
         x = np.array([0.2, 0.3, 0.5, 1.0, 2.0, 3.0, 6.0, 10.0])
         self.r_x = InterpolatedUnivariateSpline(x, r, k=1)
+        if not ('bias_in_fisher' in self.ingredients):
+            self.db_shape = (2+len(self.additional_parameters), 2+len(self.additional_parameters))
+        else:
+            self.db_shape = (2+len(self.additional_parameters)+3, 2+len(self.additional_parameters)+3)
         
     def survey_volume(self, f_sky, zmin, zmax):
         """
@@ -333,27 +329,36 @@ class survey:
         return a
 
 
-    def k_reduced(self, k, z=0.0, ap_effect=True, phase_shift=True):
+    def k_reduced(self, k, mu=0.0, z=0.0, ap_effect=False, phase_shift=True, isotropic=False):
         if ap_effect:
-            k = k/self.alpha['value']/self.ap_factor_reduced(z)
+            print('ap!')
+            if isotropic:
+                k = k/self.alpha['value']/self.ap_factor_reduced(z)
+            else:
+                av, ap, a = self.ap_factor(z)
+                k = k*sqrt((1-mu**2)/av**2)
         if phase_shift:
             k += (self.beta['value']-1)*f_phase(k)/self.cosmo.s_f
         return k
     
-    def galactic_bias(self, z):
+    def galactic_bias(self, double z):
         if 'galactic_bias' not in self.ingredients:
             return 1.0
         bias = self.cosmo.D0/self.cosmo.linear_growth_factor(z)*self.b_0
         return bias
 
-    def galactic_bias_b2(self, z):
+    def galactic_bias_b2(self, double z):
         # Ref: https://arxiv.org/pdf/1511.01096.pdf
+        if 'galactic_bias' not in self.ingredients:
+            return 0.0
         b1 = self.galactic_bias(z)
         b2 = 0.412 - 2.143* b1 + 0.929* pow(b1, 2) + 0.008* pow(b1, 3)
         return b2
 
-    def galactic_bias_bs2(self, z):
+    def galactic_bias_bs2(self, double z):
         # Ref: https://arxiv.org/pdf/1405.1447.pdf (eq. 39)
+        if 'galactic_bias' not in self.ingredients:
+            return 0.0
         b1 = self.galactic_bias(z)
         bs2 = 4./7.*(1.-b1)
         return bs2
@@ -399,9 +404,9 @@ class survey:
         fog = exp(-pow(k*mu*self.sigma_p, 2)/2.)
         return fog
 
-    def oscillation_part(self, k, mu=0.0, z=0.0, damp=True, ap_effect=True, phase_shift=True):
-        k = self.k_reduced(k, z, ap_effect, phase_shift)
-        osc = self.ps.oscillation_part(k)
+    def oscillation_part(self, k, mu=0.0, z=0.0, damp=True, ap_effect=False, phase_shift=True):
+        k_t = self.k_reduced(k, mu=mu, z=z, ap_effect=ap_effect, phase_shift=phase_shift)
+        osc = self.ps.oscillation_part(k_t)
         osc *= (self.damping_factor(k, mu, z) if damp==True else 1.0)
         return osc
         
@@ -426,16 +431,17 @@ class survey:
             dpdk *= pow(self.rsd_factor_z1(z, mu), 2)
         dpdk *= pow(self.cosmo.linear_growth_factor(z)/self.cosmo.D0, 2)
         dpdk *= self.damping_factor(k, mu, z)
-        dpd_alpha = dpdk*(-k/self.ap_factor_reduced(z)/pow(self.alpha['value'], 2))
+        dpd_alpha = dpdk*(-k/pow(self.alpha['value'], 2))
         dpd_beta = dpdk*(f_phase(k)/self.cosmo.s_f)
         return np.array([dpd_alpha, dpd_beta])
 
 
     def power_spectrum_derivative_additional(self, double k, mu=0.0, z=0.0, linear=False):
-        dpdp = np.array([f(k) for f in self.ps.matter_power_spectrum_derivative_additional])
+        dpdp = np.array([f(k, mu, z) for f in self.ps.matter_power_spectrum_derivative_additional])
         if linear==False:
             dpdp *= pow(self.rsd_factor_z1(z, mu), 2)
         dpdp *= pow(self.cosmo.linear_growth_factor(z)/self.cosmo.D0, 2)
+        dpdp *= self.damping_factor(k, mu, z)
         return dpdp
 
 
@@ -450,7 +456,7 @@ class survey:
             dodk = misc.derivative(self.ps.oscillation_part, k_t, dx=1e-6)
             damp = self.damping_factor(k, mu, z)
             dodk *= damp
-            dod_alpha = dodk*(-k/self.ap_factor_reduced(z)/self.alpha['value']**2)
+            dod_alpha = dodk*(-k/self.alpha['value']**2)
             dod_beta = dodk*(f_phase(k)/self.cosmo.s_f)
             do = np.array([dod_alpha, dod_beta])
             #integrand_do = do[i]*do[j]
@@ -603,6 +609,8 @@ class survey:
             res += (p1+p2+p3)/self.ng(z) + 1/pow(self.ng(z), 2)
         return res
 
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     def bispectrum_derivative(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian', nw=False, noise=False):
         """
         will give different results depending on the coordinate
@@ -640,15 +648,19 @@ class survey:
         dp3 = self.power_spectrum_derivative(k_3, mu=mu3, z=z, linear=True)
         
         res = 2*((dp1*p2+p1*dp2)*z12*z1*z2 +(dp2*p3+p2*dp3)*z23*z2*z3 +(dp3*p1+p3*dp1)*z31*z3*z1)
-        if noise==True:
-            res += (dp1+dp2+dp3)/self.ng(z)
+        # if noise==True:
+        #     res += (dp1+dp2+dp3)/self.ng(z)
         return res
 
 
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     def bispectrum_derivative_bias(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian', nw=False, noise=False):
         """
         Calculate the derivative in terms of bias factors numerically.
         """
+        if not('bias_in_fisher' in self.ingredients):
+            return []
         b = self.galactic_bias(z)
         b2 = self.galactic_bias_b2(z)
         bs2 = self.galactic_bias_bs2(z)
@@ -665,12 +677,15 @@ class survey:
             biases_temp[i] += dbiases[i]
             Bp = self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate, nw=nw, external_biases=True, biases=tuple(biases_temp))
 
-            #print(Bm, Bp)
+            # print(Bm, Bp)
             dBdb[i] = (Bp-Bm)/(2.*dbiases[i])
         return dBdb
 
-
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     def bispectrum_derivative_additional(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian', nw=False, noise=False):
+        if len(self.additional_parameters) == 0:
+            return []
         cdef double k_1, k_2, k_3, mu_1, mu_2, mu_3
 
         if coordinate =='cartesian':
@@ -704,8 +719,8 @@ class survey:
         dp3 = self.power_spectrum_derivative_additional(k_3, mu=mu3, z=z, linear=True)
         
         res = 2*((dp1*p2+p1*dp2)*z12*z1*z2 +(dp2*p3+p2*dp3)*z23*z2*z3 +(dp3*p1+p3*dp1)*z31*z3*z1)
-        if noise==True:
-            res += (dp1+dp2+dp3)/self.ng(z)
+        # if noise==True:
+        #     res += (dp1+dp2+dp3)/self.ng(z)
         return res
 
 
@@ -803,13 +818,6 @@ class survey:
     @cython.boundscheck(False)
     @cython.wraparound(False)
     def naive_integration_bs(self, args, coordinate='cartesian', method='sobol', unique=False, mu_opt=False):
-        """
-        todos:
-            - use differrent methods of integration:
-                -trapz
-                -simps
-                -monte carlo
-        """
         #print(method)
         cdef unsigned int len_kmu = len(self.kkkmu_list)
         ints = np.zeros((len_kmu, *(self.db_shape)))
@@ -851,17 +859,34 @@ class survey:
                 ints = ints[0, 0]
             return ints
 
-    def integrand_2d(self, args, k1_min=0.01, k1_max=0.2, div_k1=19, z=0, coordinate='child18'):
+    def integrand_2d(self, args, k1_min=0.01, k1_max=0.2, div_k1=19, z=0, coordinate='child18', unique=False, mu_opt=False, integrate_over_mu=False):
         """
-        args can be k2 k3 or delta theta
+        args: k2_var, k3_var, mu1, mu2
         """
         res = 0.0
         dk1 = (k1_max-k1_min)/div_k1
         k1_list = np.linspace(k1_min+dk1/2, k1_max-dk1/2, num=div_k1)
-        for k1 in k1_list:
-            res += self.integrand_bs((k1, *args, 0., 0.,), z=z, coordinate=coordinate)
-        return res*dk1
+        if not integrate_over_mu:
+            for k1 in k1_list:
+                res += self.integrand_bs((k1, *args), z=z, coordinate=coordinate, unique=unique, mu_opt=mu_opt)
+            return res*dk1
+        else:
+            div_mu1 = 10
+            div_mu2 = 10
+            dmu1 = 1/div_k1
+            dmu2 = 2*pi/div_k1
+            mu1_list = np.linspace(dmu1/2, 1-dmu1/2, num=div_mu1)
+            mu2_list = np.linspace(dmu2/2, 2*pi-dmu2/2, num=div_mu2)
+            k2_list = [args[0]]
+            k3_list = [args[1]]
+            kkkmu_list = list(itertools.product(k1_list, k2_list, k3_list, mu1_list, mu2_list))
+            for kkkmu in kkkmu_list:
+                res += self.integrand_bs(kkkmu, z=z, coordinate=coordinate, unique=unique, mu_opt=True)
+            return res*dk1*dmu1*dmu2
+            
 
+    # @cython.boundscheck(False)
+    # @cython.wraparound(False)
     def fisher_matrix_bs(self, regions, method='sobol', addprior=False, tol=1e-4, rtol=1e-4, unique=True, verbose=False, k_max_bi=2333.):
         """
         integration methods: naive, monte_carlo, simpson, trapezoidal, sobol
@@ -951,9 +976,13 @@ class survey:
         #self.fisher_bs = np.sum(fisher_bs_list, axis=0)
 
         nap = len(self.additional_parameters)
-        fisher_bs = np.zeros((2+nap+len(self.fisher_bs_list)*3, 2+nap+len(self.fisher_bs_list)*3))
+        if 'bias_in_fisher' in self.ingredients:
+            nbp = len(self.fisher_bs_list)
+        else:
+            nbp = 0
+        fisher_bs = np.zeros((2+nap+nbp*3, 2+nap+nbp*3))
         fisher_bs[:2+nap, :2+nap] = np.sum(fisher_bs_list, axis=0)[:2+nap, :2+nap]
-        for i in range(len(self.fisher_bs_list)):
+        for i in range(nbp):
             fisher_bs[2+nap+3*i:2+nap+3*i+3, 2+nap+3*i:2+nap+3*i+3] = fisher_bs_list[i][2+nap:, 2+nap:]
             fisher_bs[2+nap+3*i:2+nap+3*i+3, :2+nap] = fisher_bs_list[i][2+nap:, :2+nap]
             fisher_bs[:2+nap, 2+nap+3*i:2+nap+3*i+3] = fisher_bs_list[i][:2+nap, 2+nap:]
