@@ -273,7 +273,11 @@ class survey:
 
         if self.survey_type == 'spectroscopic':
             if hasattr(self, 'ng_z_list'):
-                self.ng = InterpolatedUnivariateSpline(self.ng_z_list[:,0], self.ng_z_list[:,1], k=1)
+                if len(self.ng_z_list) == 1:
+                    ng_temp = self.ng_z_list[0,1]
+                    self.ng = lambda x: ng_temp*pow(x, 0)
+                else:
+                    self.ng = InterpolatedUnivariateSpline(self.ng_z_list[:,0], self.ng_z_list[:,1], k=1)
                 self.zmid_list = self.ng_z_list[:,0]
                 self.dz_list = self.ng_z_list[:,2]
             else:
@@ -353,6 +357,7 @@ class survey:
             return 0.0
         b1 = self.galactic_bias(z)
         b2 = 0.412 - 2.143* b1 + 0.929* pow(b1, 2) + 0.008* pow(b1, 3)
+        #return 0.
         return b2
 
     def galactic_bias_bs2(self, double z):
@@ -361,6 +366,7 @@ class survey:
             return 0.0
         b1 = self.galactic_bias(z)
         bs2 = 4./7.*(1.-b1)
+        #return 0.
         return bs2
 
 
@@ -661,11 +667,11 @@ class survey:
         """
         if not('bias_in_fisher' in self.ingredients):
             return []
-        b = self.galactic_bias(z)
-        b2 = self.galactic_bias_b2(z)
-        bs2 = self.galactic_bias_bs2(z)
+        cdef double b = self.galactic_bias(z)
+        cdef double b2 = self.galactic_bias_b2(z)
+        cdef double bs2 = self.galactic_bias_bs2(z)
         biases = [b, b2, bs2]
-        eps = 0.05      # assuming 5% step increment
+        cdef double eps = 0.05      # assuming 5% step increment
         dbiases = [eps, eps, eps]
         dBdb = np.array([0., 0., 0.])
         for i in range(len(dBdb)):
@@ -742,7 +748,7 @@ class survey:
     #@functools.lru_cache(maxsize=None)
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    def integrand_bs(self, (double, double, double, double, double) kmuargs, double z, coordinate='cartesian', simplify=False, noise=True, unique=False, mu_opt=False, double k_max_bi=2333):
+    def integrand_bs(self, (double, double, double, double, double) kmuargs, double z, coordinate='cartesian', simplify=False, noise=True, unique=False, mu_opt=False, double k_max_bi=0.2):
         """
         """
         integrand_db = np.zeros(self.db_shape)
@@ -958,7 +964,7 @@ class survey:
                     for i in range(len(keys)):
                         temp_list = nd_list[:,i]*(bounds[i,1]-bounds[i,0])+bounds[i,0]
 
-                        if i<3 and self.divs[i]==1:
+                        if i<3 and self.divs[i] == 1:
                             temp_list = np.repeat(bounds[:,0][i]/2 + bounds[:,1][i]/2, len(nd_list))
 
                         setattr(self, keys[i]+'_list', temp_list)
