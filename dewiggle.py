@@ -13,7 +13,7 @@ matplotlib.rcParams['ytick.right'] = True
 matplotlib.rcParams['font.family'] = 'serif'
 matplotlib.rcParams["figure.dpi"] = 100
 
-import galsurveycy as gs
+import galaxy_survey as gs
 
 
 '''
