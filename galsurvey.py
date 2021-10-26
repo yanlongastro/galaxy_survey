@@ -180,6 +180,7 @@ class survey:
             setattr(self, key, priors[key])
 
         self.evaluation_count = 0
+        self.k_max_bi = 2333.
 
     #def get_ready(self):
         if hasattr(self, 'ng_z_list'):
