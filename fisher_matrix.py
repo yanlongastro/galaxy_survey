@@ -83,12 +83,11 @@ def read_hdf5(group):
         '''
         if type(group) == str:
             with h5py.File(group, 'r') as group_:
-                keys = group_['keys']
-                matrix = group_['matrix']
+                return read_hdf5(group_)
         else:
-            keys = group['keys']
-            matrix = group['matrix']
-        return fisher(matrix, keys)
+            keys = group['keys'][()]
+            matrix = group['matrix'][()]
+            return fisher(matrix, keys)
 
 
 
