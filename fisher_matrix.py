@@ -1,6 +1,7 @@
 import numpy as np
 import h5py
 from getdist import plots, MCSamples
+import copy
 
 class fisher:
     '''
@@ -61,6 +62,14 @@ class fisher:
         for i in range(sliced.ndim):
             sigma_dict[sliced.keys[i]] = sigmas[i]
         return sigmas, sigma_dict
+
+    def normalize(self, norms={}):
+        matrix = copy.deepcopy(self.matrix)
+        for k in norms.keys():
+            e = self.keys.index(k)
+            matrix[e, :] /= norms[k]
+            matrix[:, e] /= norms[k]
+        return fisher(matrix, self.keys)
     
     def save(self, out):
         if '.txt' in out:
@@ -93,7 +102,7 @@ def read_hdf5(group):
 
 
 
-def triangle_plot(fishers, keys=None, fisher_labels=None, parameter_labels=None, nsamp=10000, rgs=10):
+def triangle_plot(fishers, keys=None, fisher_labels=None, parameter_labels=None, nsamp=10000, rgs=10, norms={}):
     random_state = np.random.default_rng(rgs)
     if type(fishers) is not list:
         fishers = [fishers]
@@ -105,7 +114,7 @@ def triangle_plot(fishers, keys=None, fisher_labels=None, parameter_labels=None,
         labels = keys
     names = keys
     ndim = len(keys)
-    covs = [f.slice(keys).matrix for f in fishers]
+    covs = [f.slice(keys).normalize(norms).matrix for f in fishers]
     samples = []
     if fisher_labels is None:
         fisher_labels = ['Matrix-%d'%(i+1) for i in range(len(fishers))]
@@ -118,4 +127,4 @@ def triangle_plot(fishers, keys=None, fisher_labels=None, parameter_labels=None,
     g = plots.get_subplot_plotter(width_inch=8)
     g.settings.alpha_filled_add = 0.5
     g.settings.axes_labelsize = 12
-    g.triangle_plot(samples, filled=True)
+    g.triangle_plot(samples, filled=False)
