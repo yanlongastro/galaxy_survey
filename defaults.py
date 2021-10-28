@@ -2,10 +2,23 @@
 defualt settings and parameters
 '''
 import numpy as np
+import fisher_matrix as fm
 
 class defaults:
     def __init__(self):
         self.set_survey_geometries()
+        self.set_alpha_prior()
+        
+
+    def set_alpha_prior(self):
+        sf_p18 = 97.288
+        dsf_p18 = 0.799344
+        sa2 = 1./(dsf_p18/sf_p18)**2
+        sb2 = 1e-20
+        matrix = np.diag([sa2, sb2])
+        keys = ['alpha', 'beta']
+        fs = fm.fisher(matrix, keys)
+        self.alpha_prior = fs
 
     def set_survey_geometries(self):
         full_sky_deg = 4*np.pi*(180/np.pi)**2
@@ -103,3 +116,26 @@ class defaults:
         }
 
 
+anu = 8/7*(11/4)**(4/3)
+nnu = 3.046
+amp = (anu+nnu)/nnu
+
+def sb2sn(x):
+    return 1/0.194057*x
+
+def sn2sb(y):
+    return 0.194057*y
+
+def sb2sn_full(x, b=1):
+    return anu/(amp-b) - anu* (-x + b)/(amp - (-x + b))
+
+def sn2sb_full(y, n=3.046):
+    b = n2b(n)
+    t = anu/(amp-b) -y
+    return b - amp*t/(t+anu)
+
+def b2n(x):
+    return anu* (x)/(amp - (x))
+    
+def n2b(y):
+    return amp*y/(y+anu)

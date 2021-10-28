@@ -34,6 +34,7 @@ DTYPE = np.float64
 
 import fisher_matrix as fm
 import galaxy_correlations as gc
+import defaults as df
 
 
 def f_phase(double k): 
@@ -190,7 +191,7 @@ class survey:
     cosmological_parameters (dict): refer camb_cosmology for details. Must be compatible.
     survey_geometrics (dict): f_sky, N_g, z_min, z_max, dz, ng_z_list ([zmid_list, ng_list]), Sigma_0, reconstruction_rate, b_0, survey_type, sigma_p, sigma8_0
     ingredients (list): 'RSD', 'damping', 'FOG', 'galactic_bias', 'bias_in_fisher', 'polynomial_in_fisher', 'ap_effect', 'shot_noise', 'reconstruction'
-    initial_params (dict of dict): alpha, beta ([value, stdev]). Derived parameters to be constrained.
+    (actually deprecated) initial_params (dict of dict): alpha, beta ([value, stdev]). Derived parameters to be constrained.
     cosmological_parameters_in_fisher (list): if not None, will only include these parameters in fisher.
     polynomial_parameters: polynomial corrections of power spectrum to be considered, including a_m, b_n.
 
@@ -213,17 +214,20 @@ class survey:
         self.pisf = pi/self.camb_cosmology.rstar
         self.evaluation_count = 0
         self.camb_cosmology.prepare_power_spectrum_derivative_parts(self.cosmological_parameters_in_fisher)
-        # self.alpha['value'] = self.camb_cosmology.alpha
 
         #
         r = np.array([1.0, 0.9, 0.8, 0.7, 0.6, 0.55, 0.52, 0.5])
         x = np.array([0.2, 0.3, 0.5, 1.0, 2.0, 3.0, 6.0, 10.0])
         self.r_x = InterpolatedUnivariateSpline(x, r, k=1, ext=3)
 
+        self.alpha = self.camb_cosmology.alpha
+        self.beta = self.camb_cosmology.beta
+        self.delta_beta = self.beta - df.n2b(self.fiducial_cosmological_parameters['nnu']['value'])
+
 
     def update_survey_setups(self, survey_geometrics={'f_sky': 0.5,'N_g': 1e100,'z_min': 0.1,'z_max': 4.0,'dz': 0.1,'Sigma_0': 16.6,'reconstruction_rate': 0.5,'b_0': 0.95,'survey_type':'spectroscopic','sigma8_0': 0.9,}, 
                              ingredients=['RSD', 'damping', 'galactic_bias', 'bias_in_fisher', 'polynomial_in_fisher', 'ap_effect', 'shot_noise', 'reconstruction'], 
-                             initial_params={'alpha': {'value': 1.0,'stdev': 0.008216265109777156}, 'beta': {'value': 1.0,'stdev': 1e10}}, 
+                             #initial_params={'alpha': {'value': 1.0,'stdev': 0.008216265109777156}, 'beta': {'value': 1.0,'stdev': 1e10}}, 
                              polynomial_parameters={'a': [0, 1, 2, 3, 4], 'b': [1, 2, 3, 4, 5]}
                              ):
         '''
@@ -233,8 +237,8 @@ class survey:
         for key in survey_geometrics:
             setattr(self, key, survey_geometrics[key])
         self.ingredients = ingredients
-        for key in initial_params:
-            setattr(self, key, initial_params[key])
+        # for key in initial_params:
+        #     setattr(self, key, initial_params[key])
         self.polynomial_parameters=polynomial_parameters
         if self.polynomial_parameters is None:
             self.polynomial_parameters = {'a': [], 'b': []}
@@ -329,8 +333,8 @@ class survey:
             kp *= self.camb_cosmology.alpha
         if phase_shift:
             if not fix_rstar:
-                kp /= self.alpha['value']
-            kp += (self.beta['value']-1)*f_phase(kp)/self.camb_cosmology.rstar
+                kp /= self.camb_cosmology.alpha
+            kp += self.delta_beta*f_phase(kp)/self.camb_cosmology.rstar
         return kp, mup
     
     def galactic_bias(self, double z, bias=False):
@@ -478,7 +482,7 @@ class survey:
         p = self.power_spectrum(k, mu, z, debug=True, no_wiggle=True, rsd=rsd, noise=False, fog=fog, damp=damp, ap_effect=ap_effect, reconstruction=reconstruction, bias=bias)
         dpdk = p*dodk
         dpdk *= self.damping_factor(k_t, mu_t, z, damp=damp, reconstruction=reconstruction)
-        dpd_alpha = dpdk*(-k_t/pow(self.alpha['value'], 2))
+        dpd_alpha = dpdk*(-k_t/pow(self.camb_cosmology.alpha, 2))
         dpd_beta = dpdk*(f_phase(k_t)/self.camb_cosmology.rstar)
         return np.array([dpd_alpha, dpd_beta])
 

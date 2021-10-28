@@ -16,6 +16,7 @@ matplotlib.rcParams["figure.dpi"] = 100
 
 import dewiggle as dw
 import galaxy_survey as gs
+import defaults as df
 
 class camb_cosmology:
     def __init__(self, parameters=None, fiducial_parameters=None, fix_H0=False):
@@ -35,6 +36,9 @@ class camb_cosmology:
         self.h = self.camb.hubble_parameter(0.)/100
         self.rstar = self.camb.get_derived_params()['rstar']*self.h
         self.fix_H0 = fix_H0
+
+        self.alpha = self.fiducial_camb.get_derived_params()['rstar']*self.fiducial_camb.hubble_parameter(0.)/self.camb.get_derived_params()['rstar']/self.camb.hubble_parameter(0.)
+        self.beta = df.n2b(self.parameters['nnu']['value'])
 
 
     def set_parameters(self, parameters):
@@ -101,8 +105,10 @@ class camb_cosmology:
 
 
     def get_ap_factors(self, z_interp_array=None):
-        q_parallel = lambda z: self.fiducial_camb.hubble_parameter(z)/self.camb.hubble_parameter(z)
-        q_vertical = lambda z: self.camb.angular_diameter_distance(z)/self.fiducial_camb.angular_diameter_distance(z)
+        h_hfid = self.camb.hubble_parameter(0.)/self.fiducial_camb.hubble_parameter(0.)
+        # we used Mpc/h so AP has no effect at z=0.
+        q_parallel = lambda z: self.fiducial_camb.hubble_parameter(z)/self.camb.hubble_parameter(z)*h_hfid
+        q_vertical = lambda z: self.camb.angular_diameter_distance(z)/self.fiducial_camb.angular_diameter_distance(z)*h_hfid
         # q_parallel != q_vertical unless z=0.
         q_isotropic = lambda z: pow(q_vertical(z), 2./3.)*pow(q_parallel(z), 1./3.)
 
@@ -118,7 +124,6 @@ class camb_cosmology:
         self.q_parallel = q_parallel
         self.q_vertical = q_vertical
         self.q_isotropic = q_isotropic
-        self.alpha = self.fiducial_camb.get_derived_params()['rstar']*self.fiducial_camb.hubble_parameter(0.)/self.camb.get_derived_params()['rstar']/self.camb.hubble_parameter(0.)
         return q_parallel, q_vertical, q_isotropic
 
     def get_power_spectrum(self, num_k=1e6):

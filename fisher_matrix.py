@@ -21,7 +21,9 @@ class fisher:
         return self.matrix[e1, e2]
         
         
-    def merge(self, income):
+    def merge(self, income=None):
+        if income == None:
+            return self
         out_keys = list(set(self.keys).union(set(income.keys)))
         out_ndim = len(out_keys)
         out_matrix = np.zeros((out_ndim, out_ndim))
