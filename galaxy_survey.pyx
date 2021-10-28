@@ -113,6 +113,9 @@ def s123(double k1, double k2, double k3):
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def two_value_interpolation_c(np.ndarray[np.float64_t] x, np.ndarray[np.float64_t] y, np.float64_t val, np.int64_t n):
+    '''
+    Input must be equally gapped
+    '''
     cdef unsigned int index, index_max, index_min, index_mid
     cdef long double _xrange, xdiff, modolo, ydiff
     cdef long double y_interp
@@ -191,7 +194,7 @@ class survey:
     cosmological_parameters (dict): refer camb_cosmology for details. Must be compatible.
     survey_geometrics (dict): f_sky, N_g, z_min, z_max, dz, ng_z_list ([zmid_list, ng_list]), Sigma_0, reconstruction_rate, b_0, survey_type, sigma_p, sigma8_0
     ingredients (list): 'RSD', 'damping', 'FOG', 'galactic_bias', 'bias_in_fisher', 'polynomial_in_fisher', 'ap_effect', 'shot_noise', 'reconstruction'
-    (actually deprecated) initial_params (dict of dict): alpha, beta ([value, stdev]). Derived parameters to be constrained.
+    (deprecated) initial_params (dict of dict): alpha, beta ([value, stdev]). Derived parameters to be constrained.
     cosmological_parameters_in_fisher (list): if not None, will only include these parameters in fisher.
     polynomial_parameters: polynomial corrections of power spectrum to be considered, including a_m, b_n.
 

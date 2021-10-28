@@ -130,7 +130,13 @@ class camb_cosmology:
         n = int(num_k)
         kh = np.logspace(-4, 0.5, num=n)
         pk = self.camb.get_matter_power_interpolator(nonlinear=False).P(0., kh)
-        self.matter_power_spectrum, self.matter_power_spectrum_no_wiggle = dw.dewiggle(kh, pk)
+        matter_power_spectrum, matter_power_spectrum_no_wiggle = dw.dewiggle(kh, pk)
+
+        kh = np.linspace(1e-4, 1, num=n)
+        pk = np.array([matter_power_spectrum(x) for x in kh])
+        pknw = np.array([matter_power_spectrum_no_wiggle(x) for x in kh])
+        self.matter_power_spectrum = lambda x: gs.two_value_interpolation_c(kh, pk, x, n)
+        self.matter_power_spectrum_no_wiggle = lambda x: gs.two_value_interpolation_c(kh, pknw, x, n)
 
         kh = np.linspace(1e-4, 1, num=n)
         osc = np.array([self.matter_power_spectrum(x)/self.matter_power_spectrum_no_wiggle(x)-1. for x in kh])
