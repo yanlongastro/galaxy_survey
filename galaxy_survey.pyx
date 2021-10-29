@@ -116,7 +116,7 @@ def two_value_interpolation_c(np.ndarray[np.float64_t] x, np.ndarray[np.float64_
     '''
     Input must be equally gapped
     '''
-    cdef unsigned int index, index_max, index_min, index_mid
+    cdef  int index, index_max, index_min, index_mid
     cdef long double _xrange, xdiff, modolo, ydiff
     cdef long double y_interp
 
@@ -282,6 +282,7 @@ class survey:
             ndim_p += 1
         if 'polynomial_in_fisher' in self.ingredients:
             ndim_p += len(self.polynomial_parameters['a']) + len(self.polynomial_parameters['b'])
+            ndim_b += len(self.polynomial_parameters['a']) + len(self.polynomial_parameters['b'])
         self.db_shape = (ndim_b, ndim_b)
         self.dp_shape = (ndim_p, ndim_p)
 
@@ -452,8 +453,8 @@ class survey:
         
         # prepare k, mu for broadband
         if ap_effect_wiggle_only:
-            # drop external wiggles
-            k1, mu1 = self.reduced_k_and_mu(k, mu=mu, z=z, ap_effect=ap_effect)
+            # drop external parts, just use the fiducial one.
+            k1, mu1 = self.reduced_k_and_mu(k, mu=mu, z=z, ap_effect=False)
         else:
             k1, mu1 = self.reduced_k_and_mu(k, mu=mu, z=z, ap_effect=ap_effect, external_q_parts=(q_parallel, q_vertical, q_isotropic))
         cdef double p = matter_power_spectrum_no_wiggle(k1)
@@ -556,13 +557,14 @@ class survey:
                     q_isotropic = self.camb_cosmology.q_isotropic
                 else:
                     matter_power_spectrum_no_wiggle = psdp['matter_power_spectrum_no_wiggle']
+                    oscillation_part = psdp['oscillation_part']
                     q_parallel = psdp['q_parallel']
                     q_vertical = psdp['q_vertical'] 
                     q_isotropic = psdp['q_isotropic']
-                Pt = self.power_spectrum(k, mu=mu, z=z, external_ps_parts=(matter_power_spectrum_no_wiggle,
-                                                                            oscillation_part, q_parallel, q_vertical, q_isotropic), 
-                                                                            matter_only=matter_only,
-                                                                            ap_effect_wiggle_only=np.any([wiggle_only, phase_only])
+                Pt = self.power_spectrum(k, mu=mu, z=z, 
+                                        external_ps_parts=(matter_power_spectrum_no_wiggle, oscillation_part, q_parallel, q_vertical, q_isotropic), 
+                                        matter_only=matter_only,
+                                        ap_effect_wiggle_only=np.any([wiggle_only, phase_only]))
 
                 if pm is 'plus':
                     dP += Pt
@@ -571,19 +573,28 @@ class survey:
             dPdp.append(dP/(2*self.camb_cosmology.power_spectrum_derivative_parts[key]['h']))
         return np.array(dPdp)
 
-    def power_spectrum_derivative_polynomial(self, double k, mu=0.0, z=0.0):
+    def power_spectrum_derivative_polynomial(self, double k, mu=0.0, z=0.0, wiggle_only=False, matter_only=False):
         if not('polynomial_in_fisher' in self.ingredients):
             return []
-        p = self.power_spectrum(k, mu=mu, z=z)
-        o = self.power_spectrum(k, mu=mu, z=z, external_ps_parts=(lambda x: 1.0, self.camb_cosmology.oscillation_part, 
-                                                                self.camb_cosmology.q_parallel, self.camb_cosmology.q_vertical, self.camb_cosmology.q_isotropic))
-
-        dps = []
-        for n in self.polynomial_parameters['a']:
-            dps.append(o*pow(k, n))
-        for m in self.polynomial_parameters['b']:
-            dps.append(p*pow(k, m*2))
-        return np.array(dps)
+        if not wiggle_only:
+            p = self.power_spectrum(k, mu=mu, z=z, matter_only=matter_only)
+            o = self.power_spectrum(k, mu=mu, z=z, matter_only=matter_only, external_ps_parts=(lambda x: 1.0, self.camb_cosmology.oscillation_part, 
+                                                                    self.camb_cosmology.q_parallel, self.camb_cosmology.q_vertical, self.camb_cosmology.q_isotropic))
+            dps = []
+            for n in self.polynomial_parameters['a']:
+                dps.append(o*pow(k, n))
+            for m in self.polynomial_parameters['b']:
+                dps.append(p*pow(k, m*2))
+            return np.array(dps)
+        else:
+            p = self.power_spectrum(k, mu=mu, z=z, no_wiggle=True, matter_only=matter_only)
+            o = self.power_spectrum(k, mu=mu, z=z, matter_only=matter_only)/p-1.
+            dps = []
+            for n in self.polynomial_parameters['a']:
+                dps.append(p*pow(k, n))
+            for m in self.polynomial_parameters['b']:
+                dps.append(p*o*pow(k, m*2))
+            return np.array(dps)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -595,7 +606,7 @@ class survey:
         dp_analytical = self.power_spectrum_derivative_analytical(k, mu, z)
         dp_bias = self.power_spectrum_derivative_bias(k, mu=mu, z=z)
         dp_cosmology = self.power_spectrum_derivative_cosmological_parameters(k, mu=mu, z=z, wiggle_only=wiggle_only)
-        dp_polynomial = self.power_spectrum_derivative_polynomial(k, mu=mu, z=z)
+        dp_polynomial = self.power_spectrum_derivative_polynomial(k, mu=mu, z=z, wiggle_only=wiggle_only)
         dp = np.concatenate((dp_analytical, dp_cosmology, dp_bias, dp_polynomial))
 
         for i in range(int(self.dp_shape[0])):
@@ -646,9 +657,9 @@ class survey:
                 entries.append('bias_b1-%s'%bin_label)
             if 'polynomial_in_fisher' in self.ingredients:
                 for n in self.polynomial_parameters['a']:
-                    entries.append('poly_a%d-%s'%(n, bin_label))
+                    entries.append('ps_poly_a%d-%s'%(n, bin_label))
                 for n in self.polynomial_parameters['b']:
-                    entries.append('poly_b%d-%s'%(n, bin_label))
+                    entries.append('ps_poly_b%d-%s'%(n, bin_label))
 
             if 'RSD' not in self.ingredients:
                 for subregion in regions:
@@ -734,7 +745,7 @@ class survey:
             noise = ('shot_noise' in self.ingredients)
             fog = ('FOG' in self.ingredients) # to do
             damp = ('damping' in self.ingredients)
-            ap_effect = False #('ap_effect' in self.ingredients) # not included so far.
+            ap_effect = ('ap_effect' in self.ingredients) 
             reconstruction = ('reconstruction' in self.ingredients)
             bias = ('galactic_bias' in self.ingredients)
         if matter_only:
@@ -745,6 +756,14 @@ class survey:
             bias = False
         z = max(z, 1e-4)
 
+        if external_ps_parts is not None:
+            _, _, q_parallel, q_vertical, q_isotropic = external_ps_parts
+        else:
+            q_parallel = self.camb_cosmology.q_parallel
+            q_vertical = self.camb_cosmology.q_vertical
+            q_isotropic = self.camb_cosmology.q_isotropic
+        q3 = pow(q_isotropic(z), 3)
+
         if coordinate == 'cartesian':
             k_1, k_2, k_3 = kargs
         elif coordinate == 'child18':
@@ -752,6 +771,11 @@ class survey:
         elif coordinate == 'ascending':
             k_1, k_2, k_3 = k_tf_as(*kargs)
         mu1, mu2, mu3 = muargs
+        if ap_effect:
+            k_1, mu1 = self.reduced_k_and_mu(k_1, mu1, z=z, ap_effect=True, external_q_parts=(q_parallel, q_vertical, q_isotropic))
+            k_2, mu2 = self.reduced_k_and_mu(k_2, mu2, z=z, ap_effect=True, external_q_parts=(q_parallel, q_vertical, q_isotropic))
+            k_3, mu3 = self.reduced_k_and_mu(k_3, mu3, z=z, ap_effect=True, external_q_parts=(q_parallel, q_vertical, q_isotropic))
+        
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
 
         z12 = self.rsd_factor_z2(k_1, k_2, cos12, mu1=mu1, mu2=mu2, z=z, external_biases=external_biases, rsd=rsd, bias=bias)
@@ -763,11 +787,11 @@ class survey:
 
         # Note that we only need raw linear matter power spectrum, but wiggles can be damped
         p1 = self.power_spectrum(k_1, mu=mu1, z=z, debug=True, no_wiggle=no_wiggle, rsd=False, noise=False, fog=False, external_biases=None,damp=damp, ap_effect=False,
-                                reconstruction=reconstruction, bias=False, external_ps_parts=external_ps_parts)
+                                reconstruction=reconstruction, bias=False, external_ps_parts=external_ps_parts)/q3
         p2 = self.power_spectrum(k_2, mu=mu2, z=z, debug=True, no_wiggle=no_wiggle, rsd=False, noise=False, fog=False, external_biases=None,damp=damp, ap_effect=False,
-                                reconstruction=reconstruction, bias=False, external_ps_parts=external_ps_parts)
+                                reconstruction=reconstruction, bias=False, external_ps_parts=external_ps_parts)/q3
         p3 = self.power_spectrum(k_3, mu=mu3, z=z, debug=True, no_wiggle=no_wiggle, rsd=False, noise=False, fog=False, external_biases=None,damp=damp, ap_effect=False,
-                                reconstruction=reconstruction, bias=False, external_ps_parts=external_ps_parts)
+                                reconstruction=reconstruction, bias=False, external_ps_parts=external_ps_parts)/q3
         res = 2*(p1*p2*z12*z1*z2 +p2*p3*z23*z2*z3 +p3*p1*z31*z3*z1) *is_zero(beta(cos12)*beta(cos23)*beta(cos31))
         if noise:
             res += (p1+p2+p3)/self.ng(z) + 1/pow(self.ng(z), 2)
@@ -775,7 +799,7 @@ class survey:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    def bispectrum_derivative_analytical(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian', no_wiggle=False, matter_only=False):
+    def bispectrum_derivative_analytical(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian'):
         """
         will give different results depending on the coordinate
         """
@@ -783,18 +807,11 @@ class survey:
         noise = ('shot_noise' in self.ingredients)
         fog = ('FOG' in self.ingredients)
         damp = ('damping' in self.ingredients)
-        ap_effect = False #('ap_effect' in self.ingredients) # not included so far.
+        ap_effect = ('ap_effect' in self.ingredients)
         reconstruction = ('reconstruction' in self.ingredients)
         bias = ('galactic_bias' in self.ingredients)
-        if matter_only:
-            rsd = False
-            noise = False
-            fog = False
-            ap_effect = False
-            bias = False
 
         cdef double k_1, k_2, k_3, mu_1, mu_2, mu_3
-
         if coordinate =='cartesian':
             k_1, k_2, k_3 = kargs
         elif coordinate =='child18':
@@ -803,9 +820,17 @@ class survey:
             k_1, k_2, k_3 = k_tf_as(*kargs)
 
         mu1, mu2, mu3 = muargs
+        if ap_effect:
+            k_1, mu1 = self.reduced_k_and_mu(k_1, mu1, z=z, ap_effect=True)
+            k_2, mu2 = self.reduced_k_and_mu(k_2, mu2, z=z, ap_effect=True)
+            k_3, mu3 = self.reduced_k_and_mu(k_3, mu3, z=z, ap_effect=True)
+            q3 = pow(self.camb_cosmology.q_isotropic(z), 3)
+        else:
+            q3 = 1.
+
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
 
-        if abs(cos12)>1 or abs(cos23)>1 or abs(cos31)>1:
+        if abs(cos12)>1. or abs(cos23)>1. or abs(cos31)>1.:
             return np.array([0.0, 0.0])
 
         z12 = self.rsd_factor_z2(k_1, k_2, cos12, mu1=mu1, mu2=mu2, z=z, rsd=rsd, bias=bias)
@@ -816,33 +841,24 @@ class survey:
         z3 = self.rsd_factor_z1(z, mu=mu3, rsd=rsd, bias=bias)
 
         # still, matter only
-        p1 = self.power_spectrum(k_1, mu=mu1, z=z, no_wiggle=no_wiggle, damp=damp, reconstruction=reconstruction, matter_only=True)
-        p2 = self.power_spectrum(k_2, mu=mu2, z=z, no_wiggle=no_wiggle, damp=damp, reconstruction=reconstruction, matter_only=True)
-        p3 = self.power_spectrum(k_3, mu=mu3, z=z, no_wiggle=no_wiggle, damp=damp, reconstruction=reconstruction, matter_only=True)
+        p1 = self.power_spectrum(k_1, mu=mu1, z=z, matter_only=True)
+        p2 = self.power_spectrum(k_2, mu=mu2, z=z, matter_only=True)
+        p3 = self.power_spectrum(k_3, mu=mu3, z=z, matter_only=True)
 
         dp1 = self.power_spectrum_derivative_analytical(k_1, mu=mu1, z=z, matter_only=True)
         dp2 = self.power_spectrum_derivative_analytical(k_2, mu=mu2, z=z, matter_only=True)
         dp3 = self.power_spectrum_derivative_analytical(k_3, mu=mu3, z=z, matter_only=True)
         
-        res = 2*((dp1*p2+p1*dp2)*z12*z1*z2 +(dp2*p3+p2*dp3)*z23*z2*z3 +(dp3*p1+p3*dp1)*z31*z3*z1)
+        res = 2*((dp1*p2+p1*dp2)*z12*z1*z2 +(dp2*p3+p2*dp3)*z23*z2*z3 +(dp3*p1+p3*dp1)*z31*z3*z1)/pow(q3, 2)
         return res
 
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    def bispectrum_derivative_bias(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian', no_wiggle=False):
+    def bispectrum_derivative_bias(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian'):
         """
         Calculate the derivative in terms of bias factors numerically.
         """
-        rsd = ('RSD' in self.ingredients)
-        noise = ('shot_noise' in self.ingredients)
-        fog = ('FOG' in self.ingredients)
-        damp = ('damping' in self.ingredients)
-        ap_effect = False #('ap_effect' in self.ingredients) # not included so far.
-        reconstruction = ('reconstruction' in self.ingredients)
-        bias = ('galactic_bias' in self.ingredients)
-
-
         if not('bias_in_fisher' in self.ingredients):
             return []
         cdef double b = self.galactic_bias(z)
@@ -855,10 +871,10 @@ class survey:
         for i in range(len(dBdb)):
             biases_temp = biases
             biases_temp[i] -= dbiases[i]
-            Bm = self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate, no_wiggle=no_wiggle, external_biases=tuple(biases_temp))
+            Bm = self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate, external_biases=tuple(biases_temp))
             biases_temp = biases
             biases_temp[i] += dbiases[i]
-            Bp = self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate, no_wiggle=no_wiggle, external_biases=tuple(biases_temp))
+            Bp = self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate, external_biases=tuple(biases_temp))
             dBdb[i] = (Bp-Bm)/(2.*dbiases[i])
         return dBdb
 
@@ -885,10 +901,19 @@ class survey:
             k_1, k_2, k_3 = k_tf_as(*kargs)
 
         mu1, mu2, mu3 = muargs
+
+        if ap_effect:
+            k_1, mu1 = self.reduced_k_and_mu(k_1, mu1, z=z, ap_effect=True)
+            k_2, mu2 = self.reduced_k_and_mu(k_2, mu2, z=z, ap_effect=True)
+            k_3, mu3 = self.reduced_k_and_mu(k_3, mu3, z=z, ap_effect=True)
+            q3 = pow(self.camb_cosmology.q_isotropic(z), 3)
+        else:
+            q3 = 1.
+
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
 
         if abs(cos12)>1 or abs(cos23)>1 or abs(cos31)>1:
-            return np.array([0.0, 0.0])
+            return np.zeros(len(self.cosmological_parameters_in_fisher))
         
         z12 = self.rsd_factor_z2(k_1, k_2, cos12, mu1=mu1, mu2=mu2, z=z, rsd=rsd, bias=bias)
         z23 = self.rsd_factor_z2(k_2, k_3, cos23, mu1=mu2, mu2=mu3, z=z, rsd=rsd, bias=bias)
@@ -898,23 +923,34 @@ class survey:
         z3 = self.rsd_factor_z1(z, mu=mu3, rsd=rsd, bias=bias)
 
         # still, matter only
-        p1 = self.power_spectrum(k_1, mu=mu1, z=z, damp=damp, reconstruction=reconstruction, matter_only=True)
-        p2 = self.power_spectrum(k_2, mu=mu2, z=z, damp=damp, reconstruction=reconstruction, matter_only=True)
-        p3 = self.power_spectrum(k_3, mu=mu3, z=z, damp=damp, reconstruction=reconstruction, matter_only=True)
+        p1 = self.power_spectrum(k_1, mu=mu1, z=z, matter_only=True)
+        p2 = self.power_spectrum(k_2, mu=mu2, z=z, matter_only=True)
+        p3 = self.power_spectrum(k_3, mu=mu3, z=z, matter_only=True)
 
         dp1 = self.power_spectrum_derivative_cosmological_parameters(k_1, mu=mu1, z=z, matter_only=True, wiggle_only=wiggle_only)
         dp2 = self.power_spectrum_derivative_cosmological_parameters(k_2, mu=mu2, z=z, matter_only=True, wiggle_only=wiggle_only)
         dp3 = self.power_spectrum_derivative_cosmological_parameters(k_3, mu=mu3, z=z, matter_only=True, wiggle_only=wiggle_only)
         
-        res = 2*((dp1*p2+p1*dp2)*z12*z1*z2 +(dp2*p3+p2*dp3)*z23*z2*z3 +(dp3*p1+p3*dp1)*z31*z3*z1)
+        res = 2*((dp1*p2+p1*dp2)*z12*z1*z2 +(dp2*p3+p2*dp3)*z23*z2*z3 +(dp3*p1+p3*dp1)*z31*z3*z1)/pow(q3, 2)
         return res
 
 
 
-    def bispectrum_derivative_polynomial(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian', nw=False):
+    def bispectrum_derivative_polynomial(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian', wiggle_only=False):
         """
         This part will be different from the PS one since polynomial definition can be different.
         """
+        rsd = ('RSD' in self.ingredients)
+        noise = ('shot_noise' in self.ingredients)
+        fog = ('FOG' in self.ingredients)
+        damp = ('damping' in self.ingredients)
+        ap_effect = False #('ap_effect' in self.ingredients) # not included so far.
+        reconstruction = ('reconstruction' in self.ingredients)
+        bias = ('galactic_bias' in self.ingredients)
+
+        if not('polynomial_in_fisher' in self.ingredients):
+            return []
+
         cdef double k_1, k_2, k_3, mu_1, mu_2, mu_3
 
         if coordinate =='cartesian':
@@ -925,10 +961,19 @@ class survey:
             k_1, k_2, k_3 = k_tf_as(*kargs)
 
         mu1, mu2, mu3 = muargs
+
+        if ap_effect:
+            k_1, mu1 = self.reduced_k_and_mu(k_1, mu1, z=z, ap_effect=True)
+            k_2, mu2 = self.reduced_k_and_mu(k_2, mu2, z=z, ap_effect=True)
+            k_3, mu3 = self.reduced_k_and_mu(k_3, mu3, z=z, ap_effect=True)
+            q3 = pow(self.camb_cosmology.q_isotropic(z), 3)
+        else:
+            q3 = 1.
+
         cos12, cos23, cos31 = cost(k_1, k_2, k_3), cost(k_2, k_3, k_1), cost(k_3, k_1, k_2)
 
         if abs(cos12)>1 or abs(cos23)>1 or abs(cos31)>1:
-            return np.array([0.0, 0.0])
+            return np.zeros(len(self.polynomial_parameters['a'])+len(self.polynomial_parameters['b']))
         
         z12 = self.rsd_factor_z2(k_1, k_2, cos12, mu1=mu1, mu2=mu2, z=z)
         z23 = self.rsd_factor_z2(k_2, k_3, cos23, mu1=mu2, mu2=mu3, z=z)
@@ -937,19 +982,16 @@ class survey:
         z2 = self.rsd_factor_z1(z, mu=mu2)
         z3 = self.rsd_factor_z1(z, mu=mu3)
 
-        #print(z1, z2, z3, z12, z23, z31)
+        p1 = self.power_spectrum(k_1, mu=mu1, z=z, matter_only=True)
+        p2 = self.power_spectrum(k_2, mu=mu2, z=z, matter_only=True)
+        p3 = self.power_spectrum(k_3, mu=mu3, z=z, matter_only=True)
 
-        p1 = self.power_spectrum(k_1, mu=mu1, z=z, nw=nw, linear=True)
-        p2 = self.power_spectrum(k_2, mu=mu2, z=z, nw=nw, linear=True)
-        p3 = self.power_spectrum(k_3, mu=mu3, z=z, nw=nw, linear=True)
-
-        dp1 = self.power_spectrum_derivative_polynomial(k_1, mu=mu1, z=z, linear=True)
-        dp2 = self.power_spectrum_derivative_polynomial(k_2, mu=mu2, z=z, linear=True)
-        dp3 = self.power_spectrum_derivative_polynomial(k_3, mu=mu3, z=z, linear=True)
+        dp1 = self.power_spectrum_derivative_polynomial(k_1, mu=mu1, z=z, matter_only=True, wiggle_only=wiggle_only)
+        dp2 = self.power_spectrum_derivative_polynomial(k_2, mu=mu2, z=z, matter_only=True, wiggle_only=wiggle_only)
+        dp3 = self.power_spectrum_derivative_polynomial(k_3, mu=mu3, z=z, matter_only=True, wiggle_only=wiggle_only)
         
-        res = 2*((dp1*p2+p1*dp2)*z12*z1*z2 +(dp2*p3+p2*dp3)*z23*z2*z3 +(dp3*p1+p3*dp1)*z31*z3*z1)
-        # if noise==True:
-        #     res += (dp1+dp2+dp3)/self.ng(z)
+        res = 2*((dp1*p2+p1*dp2)*z12*z1*z2 +(dp2*p3+p2*dp3)*z23*z2*z3 +(dp3*p1+p3*dp1)*z31*z3*z1)/pow(q3, 2)
+
         return res
 
 
@@ -973,11 +1015,12 @@ class survey:
     @cython.wraparound(False)
     def integrand_bs(self, (double, double, double, double, double) kmuargs, double z, coordinate='cartesian', wiggle_only=False, unique=False, mu_opt=False, double k_max_bi=0.2):
         """
+        
         """
         integrand_db = np.zeros(self.db_shape)
         cdef double k1_var, k2_var, k3_var, mu1_var, mu2_var
         cdef double k1, k2, k3, mu1, mu2
-        cdef unsigned int i, j
+        cdef  int i, j
 
         k1_var, k2_var, k3_var, mu1_var, mu2_var = kmuargs
         cdef (double, double, double) kargs = (k1_var, k2_var, k3_var)
@@ -1005,7 +1048,7 @@ class survey:
         else:
             mu1, mu2 = mu1_var, mu2_var
 
-        mu3 = - (k1*mu1+k2*mu2)/k3
+        mu3 = -(k1*mu1+k2*mu2)/k3
 
         if unique==True and (not is_unique(k1, k2, k3)):
             return np.zeros(self.db_shape)
@@ -1018,7 +1061,8 @@ class survey:
         db_analytical = self.bispectrum_derivative_analytical(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate)
         db_bias = self.bispectrum_derivative_bias(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate)
         db_cosmology = self.bispectrum_derivative_cosmological_parameters(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, wiggle_only=wiggle_only)
-        db = np.concatenate((db_analytical, db_cosmology, db_bias))
+        db_polynomial = self.bispectrum_derivative_polynomial(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, wiggle_only=wiggle_only)
+        db = np.concatenate((db_analytical, db_cosmology, db_bias, db_polynomial))
 
         for i in range(int(self.db_shape[0])):
             for j in range(int(self.db_shape[1])):
@@ -1042,11 +1086,11 @@ class survey:
     @cython.boundscheck(False)
     @cython.wraparound(False)
     def naive_integration_bs(self, args, coordinate='cartesian', method='sobol', unique=False, mu_opt=False, wiggle_only=False):
-        cdef unsigned int len_kmu = len(self.kkkmu_list)
+        cdef int len_kmu = len(self.kkkmu_list)
         ints = np.zeros((len_kmu, *(self.db_shape)))
         #cdef double [:,:,:] res_view = res
         cdef double [:,:,:] ints_view = ints
-        cdef unsigned int i, j, k
+        cdef int i, j, k
 
         for i in range(len_kmu):
             arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, wiggle_only=wiggle_only, unique=unique, mu_opt=mu_opt, k_max_bi=self.k_max_bi)
@@ -1128,9 +1172,9 @@ class survey:
             for k in self.cosmological_parameters_in_fisher:
                 entries.append(k)
             if 'bias_in_fisher' in self.ingredients:
-                entries.append('bias_b1-%s'%bin_label)
-                entries.append('bias_b2-%s'%bin_label)
-                entries.append('bias_bs2-%s'%bin_label)
+                entries.append('bs_bias_b1-%s'%bin_label)
+                entries.append('bs_bias_b2-%s'%bin_label)
+                entries.append('bs_bias_bs2-%s'%bin_label)
 
             fisher_temp = np.zeros(self.db_shape)
             if z+dz/2 <= self.z_max_int:

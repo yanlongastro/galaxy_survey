@@ -124,7 +124,7 @@ def triangle_plot(fishers, keys=None, fisher_labels=None, parameter_labels=None,
         samps = random_state.multivariate_normal([0]*ndim, cc, size=nsamp)
         samples.append(MCSamples(samples=samps,names=names, labels=labels, label=label))
 
-    g = plots.get_subplot_plotter(width_inch=8)
+    g = plots.get_subplot_plotter(width_inch=6)
     g.settings.alpha_filled_add = 0.5
     g.settings.axes_labelsize = 12
     g.triangle_plot(samples, filled=False)
