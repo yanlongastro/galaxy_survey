@@ -425,7 +425,7 @@ class survey:
         return osc
         
     def power_spectrum(self, double k, mu=0.0, z=0.0, debug=False, no_wiggle=False, rsd=False, noise=False, fog=False, 
-                        external_biases=None, damp=False, ap_effect=False, reconstruction=False, bias=False, external_ps_parts=None, matter_only=False):
+                        external_biases=None, damp=False, ap_effect=False, reconstruction=False, bias=False, external_ps_parts=None, matter_only=False, ap_effect_wiggle_only=False):
         if not debug:
             rsd = ('RSD' in self.ingredients)
             noise = ('shot_noise' in self.ingredients)
@@ -449,8 +449,17 @@ class survey:
             q_parallel = self.camb_cosmology.q_parallel
             q_vertical = self.camb_cosmology.q_vertical
             q_isotropic = self.camb_cosmology.q_isotropic
+        
+        # prepare k, mu for broadband
+        if ap_effect_wiggle_only:
+            # drop external wiggles
+            k1, mu1 = self.reduced_k_and_mu(k, mu=mu, z=z, ap_effect=ap_effect)
+        else:
+            k1, mu1 = self.reduced_k_and_mu(k, mu=mu, z=z, ap_effect=ap_effect, external_q_parts=(q_parallel, q_vertical, q_isotropic))
+        cdef double p = matter_power_spectrum_no_wiggle(k1)
+
+        # parepare k, mu for wiggles
         k, mu = self.reduced_k_and_mu(k, mu=mu, z=z, ap_effect=ap_effect, external_q_parts=(q_parallel, q_vertical, q_isotropic))
-        cdef double p = matter_power_spectrum_no_wiggle(k)
         if not no_wiggle:
             # osc. part is replace here inside the function.
             p *= 1 + self.oscillation_part(k, mu, z, damp=damp, reconstruction=reconstruction, external_ps_parts=external_ps_parts)
@@ -514,7 +523,10 @@ class survey:
         return np.array(dPdb)
 
 
-    def power_spectrum_derivative_cosmological_parameters(self, double k, mu=0.0, z=0.0, wiggle_only=False, matter_only=False):
+    def power_spectrum_derivative_cosmological_parameters(self, double k, mu=0.0, z=0.0, wiggle_only=False, phase_only=False, matter_only=False):
+        '''
+        Note phase only here doesn't mean phase shift information, but pure ap effect that only considered in phase of wiggles.
+        '''
         dPdp = []
         for key in self.cosmological_parameters_in_fisher:
             dP = 0.
@@ -522,8 +534,25 @@ class survey:
                 psdp = self.camb_cosmology.power_spectrum_derivative_parts[key][pm]
                 if wiggle_only:
                     matter_power_spectrum_no_wiggle = self.camb_cosmology.matter_power_spectrum_no_wiggle
-                    q_parallel = self.camb_cosmology.q_parallel
-                    q_vertical = self.camb_cosmology.q_vertical
+                    oscillation_part = psdp['oscillation_part']
+                    # q_parallel = self.camb_cosmology.q_parallel
+                    # q_vertical = self.camb_cosmology.q_vertical
+
+                    # or this set
+                    q_parallel = psdp['q_parallel']
+                    q_vertical = psdp['q_vertical'] 
+
+                    q_isotropic = self.camb_cosmology.q_isotropic
+                elif phase_only:
+                    matter_power_spectrum_no_wiggle = self.camb_cosmology.matter_power_spectrum_no_wiggle
+                    oscillation_part = self.camb_cosmology.oscillation_part
+                    # q_parallel = self.camb_cosmology.q_parallel
+                    # q_vertical = self.camb_cosmology.q_vertical
+
+                    # or this set
+                    q_parallel = psdp['q_parallel']
+                    q_vertical = psdp['q_vertical'] 
+
                     q_isotropic = self.camb_cosmology.q_isotropic
                 else:
                     matter_power_spectrum_no_wiggle = psdp['matter_power_spectrum_no_wiggle']
@@ -531,7 +560,9 @@ class survey:
                     q_vertical = psdp['q_vertical'] 
                     q_isotropic = psdp['q_isotropic']
                 Pt = self.power_spectrum(k, mu=mu, z=z, external_ps_parts=(matter_power_spectrum_no_wiggle,
-                                                                            psdp['oscillation_part'], q_parallel, q_vertical, q_isotropic), matter_only=matter_only)
+                                                                            oscillation_part, q_parallel, q_vertical, q_isotropic), 
+                                                                            matter_only=matter_only,
+                                                                            ap_effect_wiggle_only=np.any([wiggle_only, phase_only])
 
                 if pm is 'plus':
                     dP += Pt
