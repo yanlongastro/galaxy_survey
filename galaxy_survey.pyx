@@ -10,9 +10,8 @@ Structure of the code changed accordingly.
 @author: yanlong@caltech.edu
 """
 
-import numpy as np
+#import numpy as np
 from astropy.cosmology import FlatLambdaCDM
-#from astropy.cosmology import Planck15
 #from scipy import interpolate
 from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy import misc
@@ -28,9 +27,9 @@ import sobol_seq
 
 cimport cython
 cimport numpy as np
-from libc.math cimport log, sqrt, log10, pi, INFINITY, pow, abs, exp
+import numpy as np
+from libc.math cimport log, sqrt, log10, pi, INFINITY, pow, abs, exp, cos, sin, floor
 from cython.parallel import prange
-DTYPE = np.float64
 
 import fisher_matrix as fm
 import galaxy_correlations as gc
@@ -41,15 +40,15 @@ def f_phase(double k):
     return 0.227*pow(k, 0.872)/(pow(k, 0.872)+pow(0.0324, 0.872))
 
 def k_tf(double k1, double delta, double theta):
-    return k1, k1+delta, sqrt(pow(k1, 2)+pow(k1+delta, 2)+2*k1*(k1+delta)*np.cos(theta))
+    return k1, k1+delta, sqrt(pow(k1, 2)+pow(k1+delta, 2)+2*k1*(k1+delta)*cos(theta))
 
 def k_tf_as(double k1, double delta1, double delta2):
     return k1, k1+delta1, k1+delta1+delta2
 
 
 def mu_tf(double mu_r, double xi, double cos12):
-    mu1_t = mu_r*np.cos(xi)
-    mu2_t = mu_r*np.sin(xi)
+    mu1_t = mu_r*cos(xi)
+    mu2_t = mu_r*sin(xi)
     mu1_t *= sqrt(2*(1-cos12))
     mu2_t *= sqrt(2*(1+cos12))
     mu1 = (mu1_t+mu2_t)/2
@@ -68,7 +67,7 @@ def beta(double x):
 
 
 def is_zero(x):
-    if x ==0:
+    if x == 0.:
         return 0.0
     else:
         return 1.0
@@ -154,12 +153,6 @@ class cosmology:
     def __init__(self, cosmology_parameters):
         for key in cosmology_parameters:
             setattr(self, key, cosmology_parameters[key])
-
-        # self.Omega_m = cosmology_parameters['Omega_m']
-        # self.Omega_b = cosmology_parameters['Omega_b']
-        # self.Omega_L = cosmology_parameters['Omega_L']
-        # self.h = cosmology_parameters['h']
-        # self.s_f = cosmology_parameters['s_f']
         self.astropy_cosmology = FlatLambdaCDM(H0=self.h*100.0, Om0=self.Omega_m)
         self.D0 = self.linear_growth_factor(0)
 
@@ -219,8 +212,8 @@ class survey:
         self.camb_cosmology.prepare_power_spectrum_derivative_parts(self.cosmological_parameters_in_fisher)
 
         #
-        r = np.array([1.0, 0.9, 0.8, 0.7, 0.6, 0.55, 0.52, 0.5])
-        x = np.array([0.2, 0.3, 0.5, 1.0, 2.0, 3.0, 6.0, 10.0])
+        r = [1.0, 0.9, 0.8, 0.7, 0.6, 0.55, 0.52, 0.5]
+        x = [0.2, 0.3, 0.5, 1.0, 2.0, 3.0, 6.0, 10.0]
         self.r_x = InterpolatedUnivariateSpline(x, r, k=1, ext=3)
 
         self.alpha = self.camb_cosmology.alpha
@@ -228,7 +221,7 @@ class survey:
         self.delta_beta = self.beta - df.n2b(self.fiducial_cosmological_parameters['nnu']['value'])
 
 
-    def update_survey_setups(self, survey_geometrics={'f_sky': 0.5,'N_g': 1e100,'z_min': 0.1,'z_max': 4.0,'dz': 0.1,'Sigma_0': 16.6,'reconstruction_rate': 0.5,'b_0': 0.95,'survey_type':'spectroscopic','sigma8_0': 0.9,}, 
+    def update_survey_setups(self, survey_geometrics={'f_sky': 0.5,'N_g': 1e100,'z_min': 0.1,'z_max': 4.0,'dz': 0.1,'Sigma_0': 16.6,'b_0': 0.95,'survey_type':'spectroscopic','sigma8_0': 0.9,}, 
                              ingredients=['RSD', 'damping', 'galactic_bias', 'bias_in_fisher', 'polynomial_in_fisher', 'ap_effect', 'shot_noise', 'reconstruction'], 
                              #initial_params={'alpha': {'value': 1.0,'stdev': 0.008216265109777156}, 'beta': {'value': 1.0,'stdev': 1e10}}, 
                              polynomial_parameters={'a': [0, 1, 2, 3, 4], 'b': [1, 2, 3, 4, 5]}
@@ -265,7 +258,7 @@ class survey:
                 self.dz_list = self.ng_z_list[:,2]
             else:
                 self.ng = lambda x: self.N_g/self.V_tot
-                number_z = int(np.floor((self.z_max-self.z_min)/self.dz))
+                number_z = int(floor((self.z_max-self.z_min)/self.dz))
                 self.z_max_int = self.z_min+self.dz*number_z
                 self.zmid_list = np.linspace(self.z_min+self.dz/2, self.z_max_int-self.dz/2, num=number_z)
                 if self.z_max_int != self.z_max:
@@ -439,7 +432,9 @@ class survey:
             rsd = False
             noise = False
             fog = False
+            damp = ('damping' in self.ingredients)
             ap_effect = False
+            reconstruction = ('reconstruction' in self.ingredients)
             bias = False
         z = max(z, 1e-4)
 
@@ -841,9 +836,9 @@ class survey:
         z3 = self.rsd_factor_z1(z, mu=mu3, rsd=rsd, bias=bias)
 
         # still, matter only
-        p1 = self.power_spectrum(k_1, mu=mu1, z=z, matter_only=True)
-        p2 = self.power_spectrum(k_2, mu=mu2, z=z, matter_only=True)
-        p3 = self.power_spectrum(k_3, mu=mu3, z=z, matter_only=True)
+        p1 = self.power_spectrum(k_1, mu=mu1, z=z, matter_only=True, no_wiggle=True)
+        p2 = self.power_spectrum(k_2, mu=mu2, z=z, matter_only=True, no_wiggle=True)
+        p3 = self.power_spectrum(k_3, mu=mu3, z=z, matter_only=True, no_wiggle=True)
 
         dp1 = self.power_spectrum_derivative_analytical(k_1, mu=mu1, z=z, matter_only=True)
         dp2 = self.power_spectrum_derivative_analytical(k_2, mu=mu2, z=z, matter_only=True)
@@ -885,7 +880,7 @@ class survey:
         noise = ('shot_noise' in self.ingredients)
         fog = ('FOG' in self.ingredients)
         damp = ('damping' in self.ingredients)
-        ap_effect = False #('ap_effect' in self.ingredients) # not included so far.
+        ap_effect = ('ap_effect' in self.ingredients)
         reconstruction = ('reconstruction' in self.ingredients)
         bias = ('galactic_bias' in self.ingredients)
 
@@ -923,9 +918,9 @@ class survey:
         z3 = self.rsd_factor_z1(z, mu=mu3, rsd=rsd, bias=bias)
 
         # still, matter only
-        p1 = self.power_spectrum(k_1, mu=mu1, z=z, matter_only=True)
-        p2 = self.power_spectrum(k_2, mu=mu2, z=z, matter_only=True)
-        p3 = self.power_spectrum(k_3, mu=mu3, z=z, matter_only=True)
+        p1 = self.power_spectrum(k_1, mu=mu1, z=z, matter_only=True, no_wiggle=wiggle_only)
+        p2 = self.power_spectrum(k_2, mu=mu2, z=z, matter_only=True, no_wiggle=wiggle_only)
+        p3 = self.power_spectrum(k_3, mu=mu3, z=z, matter_only=True, no_wiggle=wiggle_only)
 
         dp1 = self.power_spectrum_derivative_cosmological_parameters(k_1, mu=mu1, z=z, matter_only=True, wiggle_only=wiggle_only)
         dp2 = self.power_spectrum_derivative_cosmological_parameters(k_2, mu=mu2, z=z, matter_only=True, wiggle_only=wiggle_only)
@@ -944,7 +939,7 @@ class survey:
         noise = ('shot_noise' in self.ingredients)
         fog = ('FOG' in self.ingredients)
         damp = ('damping' in self.ingredients)
-        ap_effect = False #('ap_effect' in self.ingredients) # not included so far.
+        ap_effect = ('ap_effect' in self.ingredients)
         reconstruction = ('reconstruction' in self.ingredients)
         bias = ('galactic_bias' in self.ingredients)
 
@@ -982,9 +977,9 @@ class survey:
         z2 = self.rsd_factor_z1(z, mu=mu2)
         z3 = self.rsd_factor_z1(z, mu=mu3)
 
-        p1 = self.power_spectrum(k_1, mu=mu1, z=z, matter_only=True)
-        p2 = self.power_spectrum(k_2, mu=mu2, z=z, matter_only=True)
-        p3 = self.power_spectrum(k_3, mu=mu3, z=z, matter_only=True)
+        p1 = self.power_spectrum(k_1, mu=mu1, z=z, matter_only=True, no_wiggle=wiggle_only)
+        p2 = self.power_spectrum(k_2, mu=mu2, z=z, matter_only=True, no_wiggle=wiggle_only)
+        p3 = self.power_spectrum(k_3, mu=mu3, z=z, matter_only=True, no_wiggle=wiggle_only)
 
         dp1 = self.power_spectrum_derivative_polynomial(k_1, mu=mu1, z=z, matter_only=True, wiggle_only=wiggle_only)
         dp2 = self.power_spectrum_derivative_polynomial(k_2, mu=mu2, z=z, matter_only=True, wiggle_only=wiggle_only)
@@ -1032,7 +1027,7 @@ class survey:
             cos12 = cost(*kargs)
         elif coordinate == 'child18':
             k1, k2, k3 = k_tf(*kargs)
-            cos12 = np.cos(k3_var)
+            cos12 = cos(k3_var)
         elif coordinate =='ascending':
             k1, k2, k3 = k_tf_as(*kargs)
             if beta(cost(k1, k2, k3)) == 0.0:
@@ -1072,7 +1067,7 @@ class survey:
         if coordinate in ['cartesian', 'ascending']:
             integrand_cov = k1*k2*k3*beta(cos12)/s123(k1, k2, k3)/(p1*p2*p3)
         elif coordinate == 'child18':    
-            integrand_cov = pow(k1*k2, 2)*np.sin(k3_var) *beta(cos12)/s123(k1, k2, k3)/(p1*p2*p3)
+            integrand_cov = pow(k1*k2, 2)*sin(k3_var) *beta(cos12)/s123(k1, k2, k3)/(p1*p2*p3)
         integrand = integrand_db*integrand_cov
         if 'RSD' in self.ingredients:
             if not mu_opt:
@@ -1172,9 +1167,14 @@ class survey:
             for k in self.cosmological_parameters_in_fisher:
                 entries.append(k)
             if 'bias_in_fisher' in self.ingredients:
-                entries.append('bs_bias_b1-%s'%bin_label)
-                entries.append('bs_bias_b2-%s'%bin_label)
-                entries.append('bs_bias_bs2-%s'%bin_label)
+                entries.append('bias_b1-%s'%bin_label)
+                entries.append('bias_b2-%s'%bin_label)
+                entries.append('bias_bs2-%s'%bin_label)
+            if 'polynomial_in_fisher' in self.ingredients:
+                for n in self.polynomial_parameters['a']:
+                    entries.append('bs_poly_a%d-%s'%(n, bin_label))
+                for n in self.polynomial_parameters['b']:
+                    entries.append('bs_poly_b%d-%s'%(n, bin_label))
 
             fisher_temp = np.zeros(self.db_shape)
             if z+dz/2 <= self.z_max_int:

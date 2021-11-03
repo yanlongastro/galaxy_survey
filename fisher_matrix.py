@@ -38,11 +38,18 @@ class fisher:
                         out_matrix[i, j] += matrix[e1, e2]
         return fisher(out_matrix, out_keys)
 
-    def slice(self, keys=None, exclude=False):
+    def slice(self, keys=None, exclude=False, fuzzy_filter=False):
         if keys is None or len(keys)==0:
             matrix = self.matrix
             keys = self.keys
         else:
+            if fuzzy_filter:
+                temp = []
+                for k in self.keys:
+                    for kin in keys:
+                        if kin in k and not (k in temp):
+                            temp.append(k)
+                keys = temp
             if exclude:
                 keys = list(set(self.keys).difference(set(keys)))
             ndim = len(keys)
