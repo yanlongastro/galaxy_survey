@@ -1,10 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Apr 26 09:32:50 2019
-
-@author: Yanlong
-"""
-
+#!python
 #cython: language_level=3 
 
 # setup.py
@@ -17,10 +11,10 @@ setup(ext_modules = cythonize(Extension(
     module,
     sources=[module+'.pyx'],
     language='c',
-    language_level="3",
+    #language_level="3",
     include_dirs=[numpy.get_include()],
     library_dirs=[],
     libraries=[],
-    extra_compile_args=["-O3", "-ffast-math","-march=native", "-openmp"],
-    extra_link_args=['-openmp']
+    extra_compile_args=["-O3", "-ffast-math","-march=native", "-fopenmp"],
+    extra_link_args=['-fopenmp']
 )))
