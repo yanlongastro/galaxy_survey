@@ -61,6 +61,11 @@ class fisher:
                     e2 = self.keys.index(k2)
                     matrix[i, j] = self.matrix[e1, e2]
         return fisher(matrix, keys)
+
+    def inverse(self):
+        matrix = np.linalg.inv(self.matrix)
+        keys = self.keys
+        return fisher(matrix, keys)
     
     def constraints(self, keys=None):
         sliced = self.slice(keys)
