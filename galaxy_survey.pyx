@@ -23,6 +23,7 @@ import pathos.pools as pp
 from multiprocessing import cpu_count, Pool
 import time
 import sobol_seq
+import platform
 
 
 cimport cython
@@ -111,13 +112,14 @@ def s123(double k1, double k2, double k3):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
+@cython.cdivision(True)
 def two_value_interpolation_c(np.ndarray[np.float64_t] x, np.ndarray[np.float64_t] y, np.float64_t val, np.int64_t n):
     '''
     Input must be equally gapped
     '''
-    cdef  int index, index_max, index_min, index_mid
-    cdef long double _xrange, xdiff, modolo, ydiff
-    cdef long double y_interp
+    cdef int index, index_max, index_min, index_mid
+    cdef double _xrange, xdiff, modolo, ydiff
+    cdef double y_interp
 
     # index = 0
     # while x[index] <= val:
@@ -633,7 +635,9 @@ class survey:
     @cython.boundscheck(False)
     @cython.wraparound(False)
     def get_power_spectrum_fisher_matrix(self, regions=[{'k_min': 0.01,'k_max': 0.5,'mu_min': -1.0,'mu_max': 1.0}],
-                                        addprior=False, tol=1e-4, rtol=1e-4, div_k=50, div_mu=20, parallel=False, wiggle_only=False, physical_kmin=True):
+                                        addprior=False, tol=1e-4, rtol=1e-4, div_k=50, div_mu=20, parallel=False, wiggle_only=False, physical_kmin=True, verbose=False):
+        if verbose:
+            print('>', end='')
         fisher_matrix_ps_list = []
         for iz in range(len(self.zmid_list)):
             z = self.zmid_list[iz]
@@ -689,6 +693,9 @@ class survey:
                     else:
                         fisher_temp += v/(8*pi**2)*integrate.dblquad(self.integrand_ps, mu_min, mu_max, lambda mu: k_min, lambda mu: k_max, args=(z,), epsabs=tol, epsrel=rtol)[0]
             fisher_matrix_ps_list.append(fm.fisher(fisher_temp, entries))
+
+        if verbose:
+            print('')
         self.fisher_matrix_ps_list = fisher_matrix_ps_list
         nzs = len(fisher_matrix_ps_list)
         fisher_ps = fisher_matrix_ps_list[0]
@@ -806,7 +813,12 @@ class survey:
         reconstruction = ('reconstruction' in self.ingredients)
         bias = ('galactic_bias' in self.ingredients)
 
-        cdef double k_1, k_2, k_3, mu_1, mu_2, mu_3
+        cdef double k_1 = 0.
+        cdef double k_2 = 0.
+        cdef double k_3 = 0.
+        cdef double mu1 = 0.
+        cdef double mu2 = 0.
+        cdef double mu3 = 0.
         if coordinate =='cartesian':
             k_1, k_2, k_3 = kargs
         elif coordinate =='child18':
@@ -886,7 +898,12 @@ class survey:
 
         if len(self.cosmological_parameters_in_fisher) == 0:
             return []
-        cdef double k_1, k_2, k_3, mu_1, mu_2, mu_3
+        cdef double k_1 = 0.
+        cdef double k_2 = 0.
+        cdef double k_3 = 0.
+        cdef double mu1 = 0.
+        cdef double mu2 = 0.
+        cdef double mu3 = 0.
 
         if coordinate =='cartesian':
             k_1, k_2, k_3 = kargs
@@ -946,7 +963,12 @@ class survey:
         if not('polynomial_in_fisher' in self.ingredients):
             return []
 
-        cdef double k_1, k_2, k_3, mu_1, mu_2, mu_3
+        cdef double k_1 = 0.
+        cdef double k_2 = 0.
+        cdef double k_3 = 0.
+        cdef double mu1 = 0.
+        cdef double mu2 = 0.
+        cdef double mu3 = 0.
 
         if coordinate =='cartesian':
             k_1, k_2, k_3 = kargs
@@ -1086,12 +1108,23 @@ class survey:
         #cdef double [:,:,:] res_view = res
         cdef double [:,:,:] ints_view = ints
         cdef int i, j, k
+        cdef int shape_0 = self.db_shape[0]
+        cdef int shape_1 = self.db_shape[1]
 
-        for i in range(len_kmu):
-            arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, wiggle_only=wiggle_only, unique=unique, mu_opt=mu_opt, k_max_bi=self.k_max_bi)
-            for j in range(self.db_shape[0]):
-                for k in range(self.db_shape[1]):
-                    ints_view[i,j,k] = arr[j,k]
+        if platform.system() == 'Windows':
+            for i in range(len_kmu):
+                arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, wiggle_only=wiggle_only, unique=unique, mu_opt=mu_opt, k_max_bi=self.k_max_bi)
+                for j in range(shape_0):
+                    for k in range(shape_1):
+                        ints_view[i,j,k] = arr[j,k]
+
+        if platform.system() == 'Linux':
+            for i in range(len_kmu):
+                arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, wiggle_only=wiggle_only, unique=unique, mu_opt=mu_opt, k_max_bi=self.k_max_bi)
+                for j in range(shape_0):
+                    for k in range(shape_1):
+                        ints_view[i,j,k] = arr[j,k]
+
 
         if method in ['naive', 'monte_carlo', 'sobol']:
             return np.sum(ints, axis=0)*np.prod(self.dds)
@@ -1159,6 +1192,9 @@ class survey:
         self.k_max_bi = k_max_bi
         
         for iz in range(len(self.zmid_list)):
+            if verbose:
+                print(">", end='')
+
             z = self.zmid_list[iz]
             dz = self.dz_list[iz]
 
@@ -1244,9 +1280,9 @@ class survey:
                 self.sampling_count += np.prod(self.divs)
 
             fisher_matrix_bs_list.append(fm.fisher(fisher_temp, entries))
-            if verbose is True:
-                print('%.3f'%z, fisher_temp.flatten())
         
+        if verbose:
+            print('')
         self.fisher_matrix_bs_list = fisher_matrix_bs_list
         nzs = len(fisher_matrix_bs_list)
         fisher_bs = fisher_matrix_bs_list[0]

@@ -3,6 +3,7 @@ import numpy as np
 from tqdm.notebook import tqdm
 import camb
 import copy
+from functools import lru_cache
 
 import matplotlib.pyplot as plt
 import matplotlib
@@ -118,9 +119,9 @@ class camb_cosmology:
         qp = q_parallel(z_interp_array)
         qv = q_vertical(z_interp_array)
         qr = q_isotropic(z_interp_array)
-        q_parallel = lambda x: gs.two_value_interpolation_c(z_interp_array, qp, x, nz)
-        q_vertical = lambda x: gs.two_value_interpolation_c(z_interp_array, qv, x, nz)
-        q_isotropic = lambda x: gs.two_value_interpolation_c(z_interp_array, qr, x, nz)
+        q_parallel = lru_cache(maxsize=None)(lambda x: gs.two_value_interpolation_c(z_interp_array, qp, x, nz))
+        q_vertical = lru_cache(maxsize=None)(lambda x: gs.two_value_interpolation_c(z_interp_array, qv, x, nz))
+        q_isotropic = lru_cache(maxsize=None)(lambda x: gs.two_value_interpolation_c(z_interp_array, qr, x, nz))
         self.q_parallel = q_parallel
         self.q_vertical = q_vertical
         self.q_isotropic = q_isotropic
@@ -135,14 +136,14 @@ class camb_cosmology:
         kh = np.linspace(1e-4, 1, num=n)
         pk = np.array([matter_power_spectrum(x) for x in kh])
         pknw = np.array([matter_power_spectrum_no_wiggle(x) for x in kh])
-        self.matter_power_spectrum = lambda x: gs.two_value_interpolation_c(kh, pk, x, n)
-        self.matter_power_spectrum_no_wiggle = lambda x: gs.two_value_interpolation_c(kh, pknw, x, n)
+        self.matter_power_spectrum = lru_cache(maxsize=None)(lambda x: gs.two_value_interpolation_c(kh, pk, x, n))
+        self.matter_power_spectrum_no_wiggle = lru_cache(maxsize=None)(lambda x: gs.two_value_interpolation_c(kh, pknw, x, n))
 
         kh = np.linspace(1e-4, 1, num=n)
         osc = np.array([self.matter_power_spectrum(x)/self.matter_power_spectrum_no_wiggle(x)-1. for x in kh])
-        self.oscillation_part = lambda x: gs.two_value_interpolation_c(kh, osc, x, n)
+        self.oscillation_part = lru_cache(maxsize=None)(lambda x: gs.two_value_interpolation_c(kh, osc, x, n))
         dodk = np.diff(osc)/np.diff(kh)
-        self.oscillation_part_derivative = lambda x: gs.two_value_interpolation_c(kh[:-1], dodk, x, n-1)
+        self.oscillation_part_derivative = lru_cache(maxsize=None)(lambda x: gs.two_value_interpolation_c(kh[:-1], dodk, x, n-1))
 
 
     def power_spectrum_derivative_parts_factory(self, parameters_plus, parameters_minus, h):
