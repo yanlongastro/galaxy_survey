@@ -113,11 +113,11 @@ def s123(double k1, double k2, double k3):
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
-def two_value_interpolation_c(np.ndarray[np.float64_t] x, np.ndarray[np.float64_t] y, np.float64_t val, np.int64_t n):
+def two_value_interpolation_c(double [:] x, double [:] y, double val, int n):
     '''
     Input must be equally gapped
     '''
-    cdef int index, index_max, index_min, index_mid
+    cdef Py_ssize_t index, index_max, index_min, index_mid
     cdef double _xrange, xdiff, modolo, ydiff
     cdef double y_interp
 
@@ -635,7 +635,7 @@ class survey:
     @cython.boundscheck(False)
     @cython.wraparound(False)
     def get_power_spectrum_fisher_matrix(self, regions=[{'k_min': 0.01,'k_max': 0.5,'mu_min': -1.0,'mu_max': 1.0}],
-                                        addprior=False, tol=1e-4, rtol=1e-4, div_k=50, div_mu=20, parallel=False, wiggle_only=False, physical_kmin=True, verbose=False):
+                                        addprior=False, tol=1e-4, rtol=1e-4, div_k=200, div_mu=50, parallel=False, wiggle_only=False, physical_kmin=True, verbose=False):
         if verbose:
             print('>', end='')
         fisher_matrix_ps_list = []
@@ -1035,9 +1035,12 @@ class survey:
         
         """
         integrand_db = np.zeros(self.db_shape)
+        cdef double [:,::1] integrand_db_view = integrand_db
         cdef double k1_var, k2_var, k3_var, mu1_var, mu2_var
-        cdef double k1, k2, k3, mu1, mu2
-        cdef  int i, j
+        cdef double k1, k2, k3, mu1, mu2, mu3
+        cdef Py_ssize_t i, j
+        cdef double p1, p2, p3
+        cdef double angular_factor, integrand_cov
 
         k1_var, k2_var, k3_var, mu1_var, mu2_var = kmuargs
         cdef (double, double, double) kargs = (k1_var, k2_var, k3_var)
@@ -1067,9 +1070,13 @@ class survey:
 
         mu3 = -(k1*mu1+k2*mu2)/k3
 
-        if unique==True and (not is_unique(k1, k2, k3)):
+        if unique and (not is_unique(k1, k2, k3)):
             return np.zeros(self.db_shape)
-        angular_factor = sigma_angle(mu1, mu2, cos12)
+
+        if mu_opt:
+            angular_factor = 0.5/pi
+        else:
+            angular_factor = sigma_angle(mu1, mu2, cos12)
         if 'RSD' in self.ingredients and (angular_factor == 0.) and (not mu_opt):
             return np.zeros(self.db_shape)
         if k1>k_max_bi or k2>k_max_bi or k3>k_max_bi:
@@ -1081,23 +1088,18 @@ class survey:
         db_polynomial = self.bispectrum_derivative_polynomial(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, wiggle_only=wiggle_only)
         db = np.concatenate((db_analytical, db_cosmology, db_bias, db_polynomial))
 
-        for i in range(int(self.db_shape[0])):
-            for j in range(int(self.db_shape[1])):
-                integrand_db[i,j] = db[i]*db[j]
         p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z), self.power_spectrum(k2, mu=mu2, z=z), self.power_spectrum(k3, mu=mu3, z=z)
-        
         if coordinate in ['cartesian', 'ascending']:
             integrand_cov = k1*k2*k3*beta(cos12)/s123(k1, k2, k3)/(p1*p2*p3)
         elif coordinate == 'child18':    
             integrand_cov = pow(k1*k2, 2)*sin(k3_var) *beta(cos12)/s123(k1, k2, k3)/(p1*p2*p3)
-        integrand = integrand_db*integrand_cov
-        if 'RSD' in self.ingredients:
-            if not mu_opt:
-                integrand *= angular_factor
-            else:
-                integrand *= 1/(2*pi)
+
+        for i in range(self.db_shape[0]):
+            for j in range(self.db_shape[1]):
+                integrand_db_view[i,j] = db[i]*db[j]*integrand_cov*angular_factor
+
         self.evaluation_count += 1
-        return integrand
+        return integrand_db
             
 
     @cython.boundscheck(False)
@@ -1106,8 +1108,8 @@ class survey:
         cdef int len_kmu = len(self.kkkmu_list)
         ints = np.zeros((len_kmu, *(self.db_shape)))
         #cdef double [:,:,:] res_view = res
-        cdef double [:,:,:] ints_view = ints
-        cdef int i, j, k
+        cdef double [:,:,::1] ints_view = ints
+        cdef Py_ssize_t i, j, k
         cdef int shape_0 = self.db_shape[0]
         cdef int shape_1 = self.db_shape[1]
 
@@ -1180,7 +1182,7 @@ class survey:
                                             'mu_opt': True,\
                                             'bounds': ((0.01, 0.2),(0.01, 0.2),(0.01, 0.2),(0, 1),(0, 6.283185307179586)),\
                                             'divideby': 'num',\
-                                            'divs': (10, 10, 10, 10, 10)}], 
+                                            'divs': (20, 10, 10, 10, 10)}], 
                                     method='sobol', addprior=False, tol=1e-4, rtol=1e-4, unique=True, wiggle_only=False, verbose=False, k_max_bi=2333.):
         """
         integration methods: naive, monte_carlo, simpson, trapezoidal, sobol
