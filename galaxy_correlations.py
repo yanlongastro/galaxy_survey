@@ -56,18 +56,18 @@ class camb_cosmology:
                             'H0':{'value': 67.4},
                             }
         
-        default_parameters = {'ombh2': {'value': 0.0223, 'stdev': 0.00015, 'h': 0.0008},
-                            'omch2': {'value': 0.1188, 'stdev': 0.0012, 'h': 0.002},
-                            'As': {'value': 2.1413038238853928e-09,
-                            'stdev': 2.959130012032031e-11,
-                            'h': 1.0000000000000002e-10},
-                            'ns': {'value': 0.9667, 'stdev': 0.0042, 'h': 0.01},
-                            'tau': {'value': 0.066, 'stdev': 0.0073, 'h': 0.02},
-                            'YHe': {'value': 0.2478, 'stdev': 0.025, 'h': 0.005},
-                            'thetastar': {'value': 0.0104112, 'stdev': 3.1e-06, 'h': 2e-5},
-                            'nnu': {'value': 3.046, 'stdev': 1e+100, 'h': 0.08},
-                            'H0':{'value': 67.4},
-                            }
+        # default_parameters = {'ombh2': {'value': 0.0223, 'stdev': 0.00015, 'h': 0.0008},
+        #                     'omch2': {'value': 0.1188, 'stdev': 0.0012, 'h': 0.002},
+        #                     'As': {'value': 2.1413038238853928e-09,
+        #                     'stdev': 2.959130012032031e-11,
+        #                     'h': 1.0000000000000002e-10},
+        #                     'ns': {'value': 0.9667, 'stdev': 0.0042, 'h': 0.01},
+        #                     'tau': {'value': 0.066, 'stdev': 0.0073, 'h': 0.02},
+        #                     'YHe': {'value': 0.2478, 'stdev': 0.025, 'h': 0.005},
+        #                     'thetastar': {'value': 0.0104112, 'stdev': 3.1e-06, 'h': 2e-5},
+        #                     'nnu': {'value': 3.046, 'stdev': 1e+100, 'h': 0.08},
+        #                     'H0':{'value': 67.4},
+        #                     }
 
         self.default_parameters = default_parameters
         if parameters is not None:

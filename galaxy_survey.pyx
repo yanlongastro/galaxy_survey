@@ -366,7 +366,7 @@ class survey:
         nz = len(z_interp_array)
         rrs = []
         for z in z_interp_array:
-            xx = self.power_spectrum(0.14, mu=0.6, z=0.001, no_wiggle=True)*self.ng(z)/0.1734
+            xx = self.power_spectrum(0.14, mu=0.6, z=z, no_wiggle=True)*self.ng(z)/0.1734
             if xx < 0.2:
                 rrs.append(1.0)
             elif xx > 10.0:
@@ -609,7 +609,7 @@ class survey:
         for i in range(int(self.dp_shape[0])):
             for j in range(int(self.dp_shape[1])):
                 integrand_dp[i,j] = dp[i]*dp[j]
-        integrand_cov = 1/self.power_spectrum(k, mu, z)**2
+        integrand_cov = 1./self.power_spectrum(k, mu, z)**2
         integrand = integrand_dp*integrand_cov* k**2
         return integrand
 
