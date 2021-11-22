@@ -1283,8 +1283,8 @@ class survey:
 
             fisher_matrix_bs_list.append(fm.fisher(fisher_temp, entries))
         
-        if verbose:
-            print('')
+        # if verbose:
+        #     print('')
         self.fisher_matrix_bs_list = fisher_matrix_bs_list
         nzs = len(fisher_matrix_bs_list)
         fisher_bs = fisher_matrix_bs_list[0]
