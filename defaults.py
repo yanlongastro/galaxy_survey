@@ -43,7 +43,7 @@ class defaults:
             'Sigma_0': 16.6,
             'b_0': 0.95,
             'survey_type':'spectroscopic',
-            'sigma8_0': 0.9,
+            'sigma8_0': 0.811,  #planck 18
         }
 
         self.euclid = {
@@ -54,7 +54,7 @@ class defaults:
             'Sigma_0': 16.6,
             'b_0': 0.95,
             'survey_type':'spectroscopic',
-            'sigma8_0': 0.9,
+            'sigma8_0': 0.811,
         }
 
         self.boss = {
@@ -65,18 +65,18 @@ class defaults:
             'Sigma_0': 16.6,
             'b_0': 0.95,
             'survey_type':'spectroscopic',
-            'sigma8_0': 0.9,
+            'sigma8_0': 0.811,
         }
 
         self.roman = {
             'short_name': 'roman',
-            'name': r"Roamn ($H\alpha$)",
+            'name': r"Roamn (H$\alpha$)",
             'f_sky': 2000/full_sky_deg, # https://www.stsci.edu/roman/about/science-themes
             'ng_z_list': nroman,
             'Sigma_0': 16.6,
             'b_0': 0.95,
             'survey_type':'spectroscopic',
-            'sigma8_0': 0.9,
+            'sigma8_0': 0.811,
         }
 
         self.pfs = {
@@ -87,7 +87,7 @@ class defaults:
             'Sigma_0': 16.6,
             'b_0': 0.95,
             'survey_type':'spectroscopic',
-            'sigma8_0': 0.9,
+            'sigma8_0': 0.811,
         }
 
         self.spherex = {
@@ -98,7 +98,7 @@ class defaults:
             'Sigma_0': 16.6,
             'b_0': 0.95,
             'survey_type':'spectroscopic',
-            'sigma8_0': 0.9,
+            'sigma8_0': 0.811,
         }
 
         self.cvl = {
@@ -112,7 +112,7 @@ class defaults:
             'Sigma_0': 16.6,
             'b_0': 0.95,
             'survey_type':'spectroscopic',
-            'sigma8_0': 0.9,
+            'sigma8_0': 0.811,
         }
 
 

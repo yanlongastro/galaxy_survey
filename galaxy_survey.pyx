@@ -573,6 +573,7 @@ class survey:
     def power_spectrum_derivative_polynomial(self, double k, mu=0.0, z=0.0, wiggle_only=False, matter_only=False):
         if not('polynomial_in_fisher' in self.ingredients):
             return []
+        cdef double p, o
         if not wiggle_only:
             p = self.power_spectrum(k, mu=mu, z=z, matter_only=matter_only)
             o = self.power_spectrum(k, mu=mu, z=z, matter_only=matter_only, external_ps_parts=(lambda x: 1.0, self.camb_cosmology.oscillation_part, 
@@ -586,9 +587,10 @@ class survey:
         else:
             p = self.power_spectrum(k, mu=mu, z=z, no_wiggle=True, matter_only=matter_only)
             o = self.power_spectrum(k, mu=mu, z=z, matter_only=matter_only)/p-1.
+            d = self.damping_factor(k, mu=mu, z=z, damp=('damping' in self.ingredients), reconstruction=('reconstruction' in self.ingredients))
             dps = []
             for n in self.polynomial_parameters['a']:
-                dps.append(p*pow(k, n))
+                dps.append(p*d*pow(k, n))
             for m in self.polynomial_parameters['b']:
                 dps.append(p*o*pow(k, m*2))
             return np.array(dps)

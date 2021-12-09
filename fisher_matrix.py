@@ -114,7 +114,7 @@ def read_hdf5(group):
 
 
 
-def triangle_plot(fishers, keys=None, fisher_labels=None, parameter_labels=None, nsamp=10000, rgs=10, norms={}):
+def triangle_plot(fishers, keys=None, fisher_labels=None, parameter_labels=None, nsamp=10000, rgs=10, norms={}, marginalize=False):
     random_state = np.random.default_rng(rgs)
     if type(fishers) is not list:
         fishers = [fishers]
@@ -126,7 +126,10 @@ def triangle_plot(fishers, keys=None, fisher_labels=None, parameter_labels=None,
         labels = keys
     names = keys
     ndim = len(keys)
-    covs = [f.slice(keys).normalize(norms).matrix for f in fishers]
+    if not marginalize:
+        covs = [f.slice(keys).normalize(norms).matrix for f in fishers]
+    else:
+        covs = [f.inverse().slice(keys).inverse().normalize(norms).matrix for f in fishers]
     samples = []
     if fisher_labels is None:
         fisher_labels = ['Matrix-%d'%(i+1) for i in range(len(fishers))]

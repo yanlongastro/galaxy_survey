@@ -43,12 +43,12 @@ class camb_cosmology:
 
 
     def set_parameters(self, parameters):
-        default_parameters = {'ombh2': {'value': 0.0223, 'stdev': 0.00015, 'h': 0.0008},
-                            'omch2': {'value': 0.1188, 'stdev': 0.0012, 'h': 0.001},
+        default_parameters = {'ombh2': {'value': 0.02237, 'stdev': 0.00015, 'h': 0.0008},
+                            'omch2': {'value': 0.1200, 'stdev': 0.0012, 'h': 0.001},
                             'As': {'value': 2.1413038238853928e-09,
                             'stdev': 2.959130012032031e-11,
                             'h': 1.0000000000000002e-10},
-                            'ns': {'value': 0.9667, 'stdev': 0.0042, 'h': 0.01},
+                            'ns': {'value': 0.9649, 'stdev': 0.0042, 'h': 0.01},
                             'tau': {'value': 0.0544, 'stdev': 0.0073, 'h': 0.004},
                             'YHe': {'value': 0.2478, 'stdev': 0.025, 'h': 0.005},
                             'thetastar': {'value': 0.0104112, 'stdev': 3.1e-06, 'h': 1e-05},
