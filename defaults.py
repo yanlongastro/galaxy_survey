@@ -70,7 +70,7 @@ class defaults:
 
         self.roman = {
             'short_name': 'roman',
-            'name': r"Roamn (H$\alpha$)",
+            'name': r"Roman (H$\alpha$)",
             'f_sky': 2000/full_sky_deg, # https://www.stsci.edu/roman/about/science-themes
             'ng_z_list': nroman,
             'Sigma_0': 16.6,
@@ -92,7 +92,7 @@ class defaults:
 
         self.spherex = {
             'short_name': 'spherex',
-            'name': 'Spherex',
+            'name': 'SPHEREx',
             'f_sky': 0.75,
             'ng_z_list': nspherex,
             'Sigma_0': 16.6,

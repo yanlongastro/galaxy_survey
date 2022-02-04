@@ -199,7 +199,8 @@ class survey:
     """
     def __init__(self, cosmological_parameters=None, 
                 fiducial_cosmological_parameters=None, fix_H0=False,
-                cosmological_parameters_in_fisher=['ombh2', 'omch2', 'As', 'ns', 'tau', 'YHe', 'thetastar', 'nnu']
+                cosmological_parameters_in_fisher=['ombh2', 'omch2', 'As', 'ns', 'tau', 'YHe', 'thetastar', 'nnu'],
+                prepare_derivatives=True,
                 ):
         #
         self.camb_cosmology = gc.camb_cosmology(cosmological_parameters, fiducial_cosmological_parameters, fix_H0)
@@ -211,7 +212,8 @@ class survey:
             self.cosmological_parameters_in_fisher = cosmological_parameters_in_fisher
         self.pisf = pi/self.camb_cosmology.rstar
         self.evaluation_count = 0
-        self.camb_cosmology.prepare_power_spectrum_derivative_parts(self.cosmological_parameters_in_fisher)
+        if prepare_derivatives:
+            self.camb_cosmology.prepare_power_spectrum_derivative_parts(self.cosmological_parameters_in_fisher)
 
         #
         r = [1.0, 0.9, 0.8, 0.7, 0.6, 0.55, 0.52, 0.5]
@@ -283,6 +285,35 @@ class survey:
 
         #
         self.set_reconstruction_rate()
+
+
+    def prepare_alpha_transfer_matrix(self, alpha_redshift_dependence=True):
+        '''
+        calculate d(alpha(z_i))/d(p_j), p is one cosmological parameter
+        '''
+        alpha_transfer_matrix_entries = []
+        alpha_transfer_matrix = []
+        if alpha_redshift_dependence:
+            nz = len(self.zmid_list)
+        else:
+            nz = 1
+        for iz in range(nz):
+            z = self.zmid_list[iz]
+            dz = self.dz_list[iz]
+            bin_label = 'zmin%.2f_zmax%.2f'%(z-dz/2, z+dz/2)
+            if alpha_redshift_dependence:
+                alpha_transfer_matrix_entries.append('alpha-%s'%bin_label)
+            else:
+                alpha_transfer_matrix_entries.append('alpha')
+                z = 0.
+            dadp = [self.camb_cosmology.d_alpha_d_parameter(z, key) for key in self.cosmological_parameters_in_fisher]
+            alpha_transfer_matrix.append(dadp)
+        self.alpha_transfer_matrix_entries = alpha_transfer_matrix_entries
+        if nz>1:
+            self.alpha_transfer_matrix = np.array(alpha_transfer_matrix)
+        else:
+            self.alpha_transfer_matrix = np.array(alpha_transfer_matrix)[0]
+            
 
 
 
@@ -586,7 +617,7 @@ class survey:
             return np.array(dps)
         else:
             p = self.power_spectrum(k, mu=mu, z=z, no_wiggle=True, matter_only=matter_only)
-            o = self.power_spectrum(k, mu=mu, z=z, matter_only=matter_only)/p-1.
+            o = self.power_spectrum(k, mu=mu, z=z, matter_only=matter_only)/p-1.    #damping is already considered
             d = self.damping_factor(k, mu=mu, z=z, damp=('damping' in self.ingredients), reconstruction=('reconstruction' in self.ingredients))
             dps = []
             for n in self.polynomial_parameters['a']:
@@ -637,7 +668,8 @@ class survey:
     @cython.boundscheck(False)
     @cython.wraparound(False)
     def get_power_spectrum_fisher_matrix(self, regions=[{'k_min': 0.01,'k_max': 0.5,'mu_min': -1.0,'mu_max': 1.0}],
-                                        addprior=False, tol=1e-4, rtol=1e-4, div_k=200, div_mu=50, parallel=False, wiggle_only=False, physical_kmin=True, verbose=False):
+                                        addprior=False, tol=1e-4, rtol=1e-4, div_k=200, div_mu=50, parallel=False, wiggle_only=False, 
+                                        physical_kmin=True, verbose=False, alpha_redshift_dependence=True):
         if verbose:
             print('>', end='')
         fisher_matrix_ps_list = []
@@ -651,7 +683,10 @@ class survey:
                 v = self.survey_volume(self.f_sky, self.z_max_int, self.z_max)
 
             bin_label = 'zmin%.2f_zmax%.2f'%(z-dz/2, z+dz/2)
-            entries = ['alpha', 'beta']
+            if alpha_redshift_dependence:
+                entries = ['alpha-%s'%bin_label, 'beta']
+            else:
+                entries = ['alpha', 'beta']
             for k in self.cosmological_parameters_in_fisher:
                 entries.append(k)
             if 'bias_in_fisher' in self.ingredients:
@@ -1185,7 +1220,7 @@ class survey:
                                             'bounds': ((0.01, 0.2),(0.01, 0.2),(0.01, 0.2),(0, 1),(0, 6.283185307179586)),\
                                             'divideby': 'num',\
                                             'divs': (20, 10, 10, 10, 10)}], 
-                                    method='sobol', addprior=False, tol=1e-4, rtol=1e-4, unique=True, wiggle_only=False, verbose=False, k_max_bi=2333.):
+                                    method='sobol', addprior=False, tol=1e-4, rtol=1e-4, unique=True, wiggle_only=False, verbose=False, k_max_bi=2333, alpha_redshift_dependence=True):
         """
         integration methods: naive, monte_carlo, simpson, trapezoidal, sobol
         """
@@ -1203,7 +1238,10 @@ class survey:
             dz = self.dz_list[iz]
 
             bin_label = 'zmin%.2f_zmax%.2f'%(z-dz/2, z+dz/2)
-            entries = ['alpha', 'beta']
+            if alpha_redshift_dependence:
+                entries = ['alpha-%s'%bin_label, 'beta']
+            else:
+                entries = ['alpha', 'beta']
             for k in self.cosmological_parameters_in_fisher:
                 entries.append(k)
             if 'bias_in_fisher' in self.ingredients:

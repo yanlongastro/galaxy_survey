@@ -40,6 +40,7 @@ class camb_cosmology:
 
         self.alpha = self.fiducial_camb.get_derived_params()['rstar']*self.fiducial_camb.hubble_parameter(0.)/self.camb.get_derived_params()['rstar']/self.camb.hubble_parameter(0.)
         self.beta = df.n2b(self.parameters['nnu']['value'])
+        self.alpha_z =lambda z: self.alpha*self.q_isotropic(z)
 
 
     def set_parameters(self, parameters):
@@ -47,10 +48,10 @@ class camb_cosmology:
                             'omch2': {'value': 0.1200, 'stdev': 0.0012, 'h': 0.001},
                             'As': {'value': 2.1413038238853928e-09,
                             'stdev': 2.959130012032031e-11,
-                            'h': 1.0000000000000002e-10},
+                            'h': 5e-11},
                             'ns': {'value': 0.9649, 'stdev': 0.0042, 'h': 0.01},
-                            'tau': {'value': 0.0544, 'stdev': 0.0073, 'h': 0.004},
-                            'YHe': {'value': 0.2478, 'stdev': 0.025, 'h': 0.005},
+                            'tau': {'value': 0.0544, 'stdev': 0.0073, 'h': 0.0005},
+                            'YHe': {'value': 0.2478, 'stdev': 0.025, 'h': 0.002},
                             'thetastar': {'value': 0.0104112, 'stdev': 3.1e-06, 'h': 1e-05},
                             'nnu': {'value': 3.046, 'stdev': 1e+100, 'h': 0.01},
                             'H0':{'value': 67.4},
@@ -159,6 +160,7 @@ class camb_cosmology:
         plus['q_parallel'] = camb_plus.q_parallel
         plus['q_vertical'] = camb_plus.q_vertical
         plus['q_isotropic'] = camb_plus.q_isotropic
+        plus['alpha_z'] = camb_plus.alpha_z
 
         minus = {}
         minus['matter_power_spectrum'] = camb_minus.matter_power_spectrum
@@ -167,6 +169,7 @@ class camb_cosmology:
         minus['q_parallel'] = camb_minus.q_parallel
         minus['q_vertical'] = camb_minus.q_vertical
         minus['q_isotropic'] = camb_minus.q_isotropic
+        minus['alpha_z'] = camb_minus.alpha_z
 
         res = {'plus': plus,
                 'minus': minus,
@@ -192,6 +195,12 @@ class camb_cosmology:
                 continue
             res[key] = self.prepare_power_spectrum_derivative_parts_single(key)
         self.power_spectrum_derivative_parts = res
+
+    def d_alpha_d_parameter(self, z, key):
+        alpha_plus = self.power_spectrum_derivative_parts[key]['plus']['alpha_z'](z)
+        alpha_minus = self.power_spectrum_derivative_parts[key]['minus']['alpha_z'](z)
+        h = self.power_spectrum_derivative_parts[key]['h']
+        return (alpha_plus-alpha_minus)/(2.*h)
 
 
 class galaxy_correlations:
