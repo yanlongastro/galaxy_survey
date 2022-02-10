@@ -29,7 +29,7 @@ import platform
 cimport cython
 cimport numpy as np
 import numpy as np
-from libc.math cimport log, sqrt, log10, pi, INFINITY, pow, abs, exp, cos, sin, floor
+from libc.math cimport log, sqrt, log10, pi, INFINITY, pow, abs, exp, cos, sin
 from cython.parallel import prange
 
 import fisher_matrix as fm
@@ -106,6 +106,10 @@ def s123(double k1, double k2, double k3):
         return 2
     else:
         return 1
+
+
+def triple_cycle_products(k1, k2, k3, l, m, n):
+    return pow(k1, l)*pow(k2, m)*pow(k3, n)+pow(k1, m)*pow(k2, n)*pow(k3, l)+pow(k1, n)*pow(k2, l)*pow(k3, m)
 
 
 
@@ -262,12 +266,15 @@ class survey:
                 self.dz_list = self.ng_z_list[:,2]
             else:
                 self.ng = lambda x: self.N_g/self.V_tot
-                number_z = int(floor((self.z_max-self.z_min)/self.dz))
+                number_z = int(np.floor((self.z_max-self.z_min)/self.dz))
                 self.z_max_int = self.z_min+self.dz*number_z
                 self.zmid_list = np.linspace(self.z_min+self.dz/2, self.z_max_int-self.dz/2, num=number_z)
-                if self.z_max_int != self.z_max:
+                if np.abs(self.z_max_int-self.z_max)>1e-4:
                     self.zmid_list = np.append(self.zmid_list, (self.z_max+self.z_max_int)/2.0)
-                self.dz_list = np.repeat(self.dz, len(self.zmid_list))
+                    dz_list = np.repeat(self.dz, len(self.zmid_list)-1)
+                    self.dz_list = np.append(dz_list, self.z_max-self.z_max_int)
+                else:
+                    self.dz_list = np.repeat(self.dz, len(self.zmid_list))
         else:
             pass
 
