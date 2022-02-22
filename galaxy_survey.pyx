@@ -111,6 +111,23 @@ def s123(double k1, double k2, double k3):
 def triple_cycle_products(k1, k2, k3, l, m, n):
     return pow(k1, l)*pow(k2, m)*pow(k3, n)+pow(k1, m)*pow(k2, n)*pow(k3, l)+pow(k1, n)*pow(k2, l)*pow(k3, m)
 
+def partition(n, s=3):
+    if s>1:
+        res = []
+        for i in range(n//s+1):
+            for xx in partition(n-s*i, s-1):
+                temp = [j+i for j in xx]
+                temp.append(i)
+                res.append(temp)
+        return res
+    else:
+        return [[n]]
+
+
+def number_partition(i):
+    x = (i+1)*(i+2)/2 + (np.floor(i/2)+1)*3
+    return int(np.ceil(x/6))
+
 
 
 
@@ -1056,6 +1073,39 @@ class survey:
         return res
 
 
+    def bispectrum_derivative_polynomial_broadband(self, (double, double, double) kargs, muargs=(0., 0., 0.), z=0, coordinate='cartesian'):
+        '''
+        broadband bispectrum uncertainties.
+        '''
+        cdef double b, o
+        b = self.bispectrum(kargs, muargs, z, coordinate)
+        dbs = []
+
+        # first do coordinate transformation.
+        cdef double k_1 = 0.
+        cdef double k_2 = 0.
+        cdef double k_3 = 0.
+        cdef double mu1 = 0.
+        cdef double mu2 = 0.
+        cdef double mu3 = 0.
+
+        if coordinate =='cartesian':
+            k_1, k_2, k_3 = kargs
+        elif coordinate =='child18':
+            k_1, k_2, k_3 = k_tf(*kargs)
+        elif coordinate == 'ascending':
+            k_1, k_2, k_3 = k_tf_as(*kargs)
+
+
+        for n in self.polynomial_parameters['a']:
+            for lmn in partition(n):
+                dbs.append(triple_cycle_products(k_1, k_2, k_3, *lmn))
+        for m in self.polynomial_parameters['b']:
+            for lmn in partition(m):
+                dbs.append(b*triple_cycle_products(k_1, k_2, k_3, *lmn))
+        return np.array(dbs)
+
+
 
     def R_bi(self, kargs, muargs=(0.,0.,0.), z=0, coordinate='child18'):
         return self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate)/self.bispectrum(kargs, muargs=muargs, z=z, coordinate=coordinate, nw=True)
@@ -1074,7 +1124,8 @@ class survey:
     #@functools.lru_cache(maxsize=None)
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    def integrand_bs(self, (double, double, double, double, double) kmuargs, double z, coordinate='cartesian', wiggle_only=False, unique=False, mu_opt=False, double k_max_bi=0.2):
+    def integrand_bs(self, (double, double, double, double, double) kmuargs, double z, coordinate='cartesian', wiggle_only=False, 
+                    unique=False, mu_opt=False, double k_max_bi=0.2, broadband_poly_deri=False):
         """
         
         """
@@ -1129,7 +1180,10 @@ class survey:
         db_analytical = self.bispectrum_derivative_analytical(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate)
         db_bias = self.bispectrum_derivative_bias(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate)
         db_cosmology = self.bispectrum_derivative_cosmological_parameters(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, wiggle_only=wiggle_only)
-        db_polynomial = self.bispectrum_derivative_polynomial(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, wiggle_only=wiggle_only)
+        if not wiggle_only and broadband_poly_deri:
+            db_polynomial = self.bispectrum_derivative_polynomial_broadband(kargs, muargs=(mu1, mu2 ,mu3), z=z, coordinate=coordinate)
+        else:
+            db_polynomial = self.bispectrum_derivative_polynomial(kargs, muargs=(mu1, mu2, mu3), z=z, coordinate=coordinate, wiggle_only=wiggle_only)
         db = np.concatenate((db_analytical, db_cosmology, db_bias, db_polynomial))
 
         p1, p2, p3 = self.power_spectrum(k1, mu=mu1, z=z), self.power_spectrum(k2, mu=mu2, z=z), self.power_spectrum(k3, mu=mu3, z=z)
@@ -1148,7 +1202,7 @@ class survey:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    def naive_integration_bs(self, args, coordinate='cartesian', method='sobol', unique=False, mu_opt=False, wiggle_only=False):
+    def naive_integration_bs(self, args, coordinate='cartesian', method='sobol', unique=False, mu_opt=False, wiggle_only=False, broadband_poly_deri=False):
         cdef int len_kmu = len(self.kkkmu_list)
         ints = np.zeros((len_kmu, *(self.db_shape)))
         #cdef double [:,:,:] res_view = res
@@ -1159,14 +1213,16 @@ class survey:
 
         if platform.system() == 'Windows':
             for i in range(len_kmu):
-                arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, wiggle_only=wiggle_only, unique=unique, mu_opt=mu_opt, k_max_bi=self.k_max_bi)
+                arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, wiggle_only=wiggle_only, unique=unique, 
+                                        mu_opt=mu_opt, k_max_bi=self.k_max_bi, broadband_poly_deri=broadband_poly_deri)
                 for j in range(shape_0):
                     for k in range(shape_1):
                         ints_view[i,j,k] = arr[j,k]
 
         if platform.system() == 'Linux':
             for i in range(len_kmu):
-                arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, wiggle_only=wiggle_only, unique=unique, mu_opt=mu_opt, k_max_bi=self.k_max_bi)
+                arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, wiggle_only=wiggle_only, unique=unique, 
+                                        mu_opt=mu_opt, k_max_bi=self.k_max_bi, broadband_poly_deri=broadband_poly_deri)
                 for j in range(shape_0):
                     for k in range(shape_1):
                         ints_view[i,j,k] = arr[j,k]
@@ -1227,15 +1283,30 @@ class survey:
                                             'bounds': ((0.01, 0.2),(0.01, 0.2),(0.01, 0.2),(0, 1),(0, 6.283185307179586)),\
                                             'divideby': 'num',\
                                             'divs': (20, 10, 10, 10, 10)}], 
-                                    method='sobol', addprior=False, tol=1e-4, rtol=1e-4, unique=True, wiggle_only=False, verbose=False, k_max_bi=2333, alpha_redshift_dependence=True):
+                                    method='sobol', addprior=False, tol=1e-4, rtol=1e-4, unique=True, wiggle_only=False, 
+                                    verbose=False, k_max_bi=2333, alpha_redshift_dependence=True,
+                                    broadband_poly_deri=False
+                                    ):
         """
         integration methods: naive, monte_carlo, simpson, trapezoidal, sobol
+        broadband_poly_deri: add polynomials for bispectrum, rather than using the definition of ps.
         """
         fisher_matrix_bs_list = []
 
         self.evaluation_count = 0
         self.sampling_count = 0
         self.k_max_bi = k_max_bi
+
+        if broadband_poly_deri:
+            db1 = 2+len(self.cosmological_parameters_in_fisher)
+            if 'bias_in_fisher' in self.ingredients:
+                db1 += 3
+            if 'polynomial_in_fisher' in self.ingredients:
+                for n in self.polynomial_parameters['a']:
+                    db1 += number_partition(n)
+                for n in self.polynomial_parameters['b']:
+                    db1 += number_partition(n)
+            self.db_shape = (db1, db1)
         
         for iz in range(len(self.zmid_list)):
             if verbose:
@@ -1256,10 +1327,18 @@ class survey:
                 entries.append('bias_b2-%s'%bin_label)
                 entries.append('bias_bs2-%s'%bin_label)
             if 'polynomial_in_fisher' in self.ingredients:
-                for n in self.polynomial_parameters['a']:
-                    entries.append('bs_poly_a%d-%s'%(n, bin_label))
-                for n in self.polynomial_parameters['b']:
-                    entries.append('bs_poly_b%d-%s'%(n, bin_label))
+                if not broadband_poly_deri:
+                    for n in self.polynomial_parameters['a']:
+                        entries.append('bs_poly_a%d-%s'%(n, bin_label))
+                    for n in self.polynomial_parameters['b']:
+                        entries.append('bs_poly_b%d-%s'%(n, bin_label))
+                else:
+                    for n in self.polynomial_parameters['a']:
+                        for nx in partition(n):
+                            entries.append('bs_poly_a%d_%d%d%d-%s'%(n, *nx, bin_label))
+                    for n in self.polynomial_parameters['b']:
+                        for nx in partition(n):
+                            entries.append('bs_poly_b%d_%d%d%d-%s'%(n, *nx, bin_label))
 
             fisher_temp = np.zeros(self.db_shape)
             if z+dz/2 <= self.z_max_int:
@@ -1325,7 +1404,8 @@ class survey:
                     kkkmu_list = list(zip(self.k1_list, self.k2_list, self.k3_list, self.mu1_list, self.mu2_list))
 
                 self.kkkmu_list = kkkmu_list
-                fisher_temp += v/(8*pi**4)*self.naive_integration_bs(args=(z,), coordinate=subregion['coordinate'], method=method, wiggle_only=wiggle_only, unique=unique, mu_opt=subregion['mu_opt'])
+                fisher_temp += v/(8*pi**4)*self.naive_integration_bs(args=(z,), coordinate=subregion['coordinate'], method=method, wiggle_only=wiggle_only, unique=unique, 
+                                mu_opt=subregion['mu_opt'], broadband_poly_deri=broadband_poly_deri)
                 self.sampling_count += np.prod(self.divs)
 
             fisher_matrix_bs_list.append(fm.fisher(fisher_temp, entries))
