@@ -70,7 +70,7 @@ class defaults:
 
         self.roman = {
             'short_name': 'roman',
-            'name': r"Roman (H$\alpha$)",
+            'name': r"Roman",
             'f_sky': 2000/full_sky_deg, # https://www.stsci.edu/roman/about/science-themes
             'ng_z_list': nroman,
             'Sigma_0': 16.6,
