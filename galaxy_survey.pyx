@@ -241,6 +241,11 @@ class survey:
         x = [0.2, 0.3, 0.5, 1.0, 2.0, 3.0, 6.0, 10.0]
         self.r_x = InterpolatedUnivariateSpline(x, r, k=1, ext=3)
 
+        z = np.linspace(0, 10, num=100)
+        H = [self.camb_cosmology.camb.hubble_parameter(x) for x in z]
+        self.H_z = InterpolatedUnivariateSpline(z, H, k=1, ext=3)
+        self.h = self.H_z(0.)/100
+
         self.alpha = self.camb_cosmology.alpha
         self.beta = self.camb_cosmology.beta
         self.delta_beta = self.beta - df.n2b(self.fiducial_cosmological_parameters['nnu']['value'])
@@ -309,6 +314,11 @@ class survey:
 
         #
         self.set_reconstruction_rate()
+
+    def spherex_bin_noise(self, k, mu, z):
+        kp = k*mu*self.h
+        sigma = 0.003*(1+z) *3e5/self.H_z(z)
+        return np.exp(-sigma**2 *kp**2)
 
 
     def prepare_alpha_transfer_matrix(self, alpha_redshift_dependence=True):
@@ -521,6 +531,10 @@ class survey:
         p *= pow(self.cosmo.linear_growth_factor(z)/self.cosmo.D0, 2)
         if ap_effect:
             p /= q_isotropic(z)**3
+
+        if 'spherex_bin_noise' in self.ingredients:
+            p *= self.spherex_bin_noise(k, mu, z)
+        
         if noise:
             p += 1/self.ng(z)
         return p
@@ -1299,15 +1313,21 @@ class survey:
         else:
             div_mu1 = 10
             div_mu2 = 10
-            dmu1 = 1/div_k1
-            dmu2 = 2*pi/div_k1
-            mu1_list = np.linspace(dmu1/2, 1-dmu1/2, num=div_mu1)
-            mu2_list = np.linspace(dmu2/2, 2*pi-dmu2/2, num=div_mu2)
+            if mu_opt:
+                dmu1 = 1/div_mu1
+                dmu2 = 2*pi/div_mu2
+                mu1_list = np.linspace(dmu1/2, 1-dmu1/2, num=div_mu1)
+                mu2_list = np.linspace(dmu2/2, 2*pi-dmu2/2, num=div_mu2)
+            else:
+                dmu1 = 2/div_mu1
+                dmu2 = 2/div_mu2
+                mu1_list = np.linspace(-1+dmu1/2, 1-dmu1/2, num=div_mu1)
+                mu2_list = np.linspace(-1+dmu2/2, 1-dmu2/2, num=div_mu2)
             k2_list = [args[0]]
             k3_list = [args[1]]
             kkkmu_list = list(itertools.product(k1_list, k2_list, k3_list, mu1_list, mu2_list))
             for kkkmu in kkkmu_list:
-                res += self.integrand_bs(kkkmu, z=z, coordinate=coordinate, unique=unique, mu_opt=True, k_max_bi=k_max_bi)
+                res += self.integrand_bs(kkkmu, z=z, coordinate=coordinate, unique=unique, mu_opt=mu_opt, k_max_bi=k_max_bi)
             return res*dk1*dmu1*dmu2
             
 
