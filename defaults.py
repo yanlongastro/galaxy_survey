@@ -24,16 +24,16 @@ class defaults:
         full_sky_deg = 4*np.pi*(180/np.pi)**2
         self.full_sky_deg = full_sky_deg
 
-        ndesi = np.loadtxt('desi-density.txt')
-        neuclid = np.loadtxt('euclid-density.txt')
-        nboss = np.loadtxt('boss-density.txt')
+        ndesi = np.loadtxt('number_density/desi-density.txt')
+        neuclid = np.loadtxt('number_density/euclid-density.txt')
+        nboss = np.loadtxt('number_density/boss-density.txt')
         ndesi[:,1]/=1e3
         neuclid[:,1]/=1e3
         nboss[:,1]/=1e3
 
-        nroman = np.loadtxt('roman-ha-density.txt')
-        npfs = np.loadtxt('pfs-density.txt')
-        nspherex = np.loadtxt('spherex-density.txt')
+        nroman = np.loadtxt('number_density/roman-ha-density.txt')
+        npfs = np.loadtxt('number_density/pfs-density.txt')
+        nspherex = np.loadtxt('number_density/spherex-density.txt')
 
         self.desi = {
             'short_name': 'desi',

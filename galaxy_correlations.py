@@ -55,6 +55,9 @@ class camb_cosmology:
                             'thetastar': {'value': 0.0104112, 'stdev': 3.1e-06, 'h': 1e-05},
                             'nnu': {'value': 3.046, 'stdev': 1e+100, 'h': 0.01},
                             'H0':{'value': 67.4},
+                            'w':{'value': -1, 'stdev': 0.031, 'h': 0.1},
+                            'mnu':{'value': 0.06, 'stdev': 1e100, 'h': 0.005},
+                            'omk': {'value': -0.0, 'stdev': 0.012, 'h': 0.001}
                             }
         
         # default_parameters = {'ombh2': {'value': 0.0223, 'stdev': 0.00015, 'h': 0.0008},
@@ -98,9 +101,12 @@ class camb_cosmology:
                             YHe=parameters['YHe']['value'], 
                             thetastar=thetastar, 
                             nnu=parameters['nnu']['value'],
+                            mnu=parameters['mnu']['value'],
+                            omk=parameters['omk']['value'],
                             )
         pars.InitPower.set_params(As=parameters['As']['value'], ns=parameters['ns']['value'])
         pars.set_matter_power(kmax=10)
+        pars.set_dark_energy(w=parameters['w']['value'])
         pars.NonLinear = camb.model.NonLinear_none
         results = camb.get_results(pars)
         return results
@@ -189,6 +195,7 @@ class camb_cosmology:
     def prepare_power_spectrum_derivative_parts(self, keys):
         res = {}
         for key in keys:
+            print(key)
             if self.fix_H0 and key=='thetastar':
                 continue
             if not self.fix_H0 and key=='H0':

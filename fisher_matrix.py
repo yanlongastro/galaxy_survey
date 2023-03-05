@@ -78,9 +78,10 @@ class fisher:
     def normalize(self, norms={}):
         matrix = copy.deepcopy(self.matrix)
         for k in norms.keys():
-            e = self.keys.index(k)
-            matrix[e, :] /= norms[k]
-            matrix[:, e] /= norms[k]
+            if k in self.keys:
+                e = self.keys.index(k)
+                matrix[e, :] /= norms[k]
+                matrix[:, e] /= norms[k]
         return fisher(matrix, self.keys)
     
     def save(self, out):
@@ -109,6 +110,10 @@ def read_hdf5(group):
                 return read_hdf5(group_)
         else:
             keys = group['keys'][()]
+            try:
+                keys = [x.decode() for x in keys]
+            except (UnicodeDecodeError, AttributeError):
+                pass
             matrix = group['matrix'][()]
             return fisher(matrix, keys)
 

@@ -1268,7 +1268,7 @@ class survey:
                     for k in range(shape_1):
                         ints_view[i,j,k] = arr[j,k]
 
-        if platform.system() == 'Linux':
+        else:
             for i in range(len_kmu):
                 arr = self.integrand_bs(self.kkkmu_list[i], *args, coordinate=coordinate, wiggle_only=wiggle_only, unique=unique, 
                                         mu_opt=mu_opt, k_max_bi=self.k_max_bi, direct_poly_derivative=direct_poly_derivative)
